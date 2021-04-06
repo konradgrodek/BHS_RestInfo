@@ -3,7 +3,7 @@ from configparser import ConfigParser, ExtendedInterpolation
 import sys
 import requests
 
-from core.bean import *
+from core.sbean import *
 from persistence.schema import *
 
 
@@ -19,6 +19,7 @@ class Configuration(ConfigParser):
     SECTION_PRESSURE = 'PRESSURE'
     SECTION_AIRQUALITY = 'AIR-QUALITY'
     SECTION_HUMIDITY = 'HUMIDITY'
+    SECTION_CESSPIT = 'CESSPIT'
 
     PARAM_DB = 'db'
     PARAM_USER = 'user'
@@ -26,6 +27,9 @@ class Configuration(ConfigParser):
     PARAM_HOST = 'host'
     PARAM_AQ_NORM_2_5 = 'norm.pm_2_5'
     PARAM_AQ_NORM_10 = 'norm.pm_10'
+    PARAM_WARNING_LEVEL = 'warning-level'
+    PARAM_CRITICAL_LEVEL = 'critical-level'
+    PARAM_DELAY_DENOTING_FAILURE = 'delay-denoting-failure-min'
 
     def __init__(self):
         ConfigParser.__init__(self, interpolation=ExtendedInterpolation())
@@ -65,6 +69,18 @@ class Configuration(ConfigParser):
 
     def get_air_quality_norm_pm_10(self) -> int:
         return self.getint(section=self.SECTION_AIRQUALITY, option=self.PARAM_AQ_NORM_10)
+
+    def get_cesspit_host(self) -> str:
+        return self.get(section=self.SECTION_CESSPIT, option=self.PARAM_HOST)
+
+    def get_cesspit_warning_level(self) -> float:
+        return self.getfloat(section=self.SECTION_CESSPIT, option=self.PARAM_WARNING_LEVEL)
+
+    def get_cesspit_critical_level(self) -> float:
+        return self.getfloat(section=self.SECTION_CESSPIT, option=self.PARAM_CRITICAL_LEVEL)
+
+    def get_cesspit_delay_denoting_failure_min(self) -> int:
+        return self.getint(section=self.SECTION_CESSPIT, option=self.PARAM_DELAY_DENOTING_FAILURE)
 
 
 class InfoApp(Flask):
@@ -143,6 +159,24 @@ class InfoApp(Flask):
             norm={AirQualityInterpretedReadingJson.PM_10: self.info_config.get_air_quality_norm_pm_10(),
                   AirQualityInterpretedReadingJson.PM_2_5: self.info_config.get_air_quality_norm_pm_2_5()}))
 
+    def current_cesspit_level(self):
+        ori_r = requests.get(f'http://{self.info_config.get_cesspit_host()}')
+        if ori_r.status_code > 500:
+            return bean_jsonified(ErrorJsonBean(_error=f'Host {self.info_config.get_cesspit_host()} '
+                                                       f'returned HTTP status {ori_r.status_code}'))
+        elif ori_r.status_code != 200:
+            return bean_jsonified(NotAvailableJsonBean())
+
+        reading = json_to_bean(ori_r.json())
+        failure = (datetime.now() - reading.timestamp).total_seconds()/60 > \
+            self.info_config.get_cesspit_delay_denoting_failure_min()
+
+        return bean_jsonified(CesspitInterpretedReadingJson(
+            reading=reading,
+            failure_detected=failure,
+            warning_level_perc=self.info_config.get_cesspit_warning_level(),
+            critical_level_perc=self.info_config.get_cesspit_critical_level()))
+
     def pass_by(self, host):
         ori_r = requests.get(f'http://{host}')
         if ori_r.status_code > 500:
@@ -175,6 +209,11 @@ def current_humidity_in():
 @app.route('/current/air_quality')
 def current_air_quality():
     return app.current_air_quality()
+
+
+@app.route('/current/cesspit')
+def current_cesspit_level():
+    return app.current_cesspit_level()
 
 
 if __name__ == '__main__':

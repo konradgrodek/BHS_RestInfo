@@ -4,6 +4,7 @@ import sys
 import requests
 
 from core.sbean import *
+from core.util import SunsetCalculator
 from persistence.schema import *
 
 
@@ -20,6 +21,8 @@ class Configuration(ConfigParser):
     SECTION_AIRQUALITY = 'AIR-QUALITY'
     SECTION_HUMIDITY = 'HUMIDITY'
     SECTION_CESSPIT = 'CESSPIT'
+    SECTION_DAYLIGHT = 'DAYLIGHT'
+    SECTION_RAIN = 'RAIN'
 
     PARAM_DB = 'db'
     PARAM_USER = 'user'
@@ -82,6 +85,12 @@ class Configuration(ConfigParser):
     def get_cesspit_delay_denoting_failure_min(self) -> int:
         return self.getint(section=self.SECTION_CESSPIT, option=self.PARAM_DELAY_DENOTING_FAILURE)
 
+    def get_daylight_host(self) -> str:
+        return self.get(section=self.SECTION_DAYLIGHT, option=self.PARAM_HOST)
+
+    def get_rain_host(self) -> str:
+        return self.get(section=self.SECTION_RAIN, option=self.PARAM_HOST)
+
 
 class InfoApp(Flask):
 
@@ -94,15 +103,50 @@ class InfoApp(Flask):
             password=self.info_config.get_db_password(),
             host=self.info_config.get_db_host())
 
+    def _make_request(self, endpoint: str) -> tuple:
+        if not endpoint.startswith('http://'):
+             endpoint = 'http://' + endpoint
+
+        response = None
+        error = None
+
+        try:
+            response = requests.get(endpoint)
+            # this will raise HttpError on erroneous responses:
+            response.raise_for_status()
+            # ...and this will also trigger error for unexpected (although non-erroneous) status codes
+            if response.status_code != 200:
+                error = ErrorJsonBean(f'Non-typical HTTP response code detected: {response.status_code}')
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            error = NotAvailableJsonBean()
+
+        except requests.exceptions.TooManyRedirects:
+            error = ErrorJsonBean(f'Host {endpoint} is not responding correctly. '
+                                  f'Too many redirects (?)')
+
+        except requests.exceptions.HTTPError as e:
+            error = ErrorJsonBean(f'Host {endpoint} is responding, but with erroneous code. '
+                                  f'Details: {str(e)}')
+
+        except requests.exceptions.RequestException as e:
+            error = ErrorJsonBean(f'Host {endpoint} is not responding correctly. '
+                                  f'Details: {str(type(e))}: {str(e)}')
+
+        return error, response
+
     def current_temperature(self):
         hosts = self.info_config.get_temperature_hosts()
 
         consolidated_response = list()
         # make requests to all hosts
         for host in hosts:
-            r = requests.get(f'http://{host}')
-            if r.status_code == 200:
-                consolidated_response.extend(json_to_bean(r.json()))
+            error, response = self._make_request(host)
+            if not error and response:
+                consolidated_response.extend(json_to_bean(response.json()))
+
+        if len(consolidated_response) < 1:
+            return bean_jsonified(NotAvailableJsonBean())
 
         return bean_jsonified([self.convert_temperature(t) for t in consolidated_response])
 
@@ -117,14 +161,12 @@ class InfoApp(Flask):
         return temp
 
     def current_pressure(self):
-        ori_r = requests.get(f'http://{self.info_config.get_pressure_host()}')
-        if ori_r.status_code > 500:
-            return bean_jsonified(ErrorJsonBean(_error=f'Host {self.info_config.get_pressure_host()} '
-                                                       f'returned HTTP status {ori_r.status_code}'))
-        elif ori_r.status_code != 200:
-            return bean_jsonified(NotAvailableJsonBean())
+        error, response = self._make_request(self.info_config.get_pressure_host())
 
-        pressure = json_to_bean(ori_r.json())
+        if error:
+            return bean_jsonified(error)
+
+        pressure = json_to_bean(response.json())
         pressure.current_value = int(pressure.current_value)
         pressure.current_mean = int(pressure.current_mean)
         pressure.previous_mean = int(pressure.previous_mean)
@@ -132,14 +174,12 @@ class InfoApp(Flask):
         return bean_jsonified(pressure)
 
     def current_humidity(self):
-        ori_r = requests.get(f'http://{self.info_config.get_humidity_host()}')
-        if ori_r.status_code > 500:
-            return bean_jsonified(ErrorJsonBean(_error=f'Host {self.info_config.get_humidity_host()} '
-                                                       f'returned HTTP status {ori_r.status_code}'))
-        elif ori_r.status_code != 200:
-            return bean_jsonified(NotAvailableJsonBean())
+        error, response = self._make_request(self.info_config.get_humidity_host())
 
-        humidity = json_to_bean(ori_r.json())
+        if error:
+            return bean_jsonified(error)
+
+        humidity = json_to_bean(response.json())
         humidity.current_value = int(humidity.current_value)
         humidity.current_mean = int(humidity.current_mean)
         humidity.previous_mean = int(humidity.previous_mean)
@@ -147,27 +187,23 @@ class InfoApp(Flask):
         return bean_jsonified(humidity)
 
     def current_air_quality(self):
-        ori_r = requests.get(f'http://{self.info_config.get_air_quality_host()}')
-        if ori_r.status_code > 500:
-            return bean_jsonified(ErrorJsonBean(_error=f'Host {self.info_config.get_air_quality_host()} '
-                                                       f'returned HTTP status {ori_r.status_code}'))
-        elif ori_r.status_code != 200:
-            return bean_jsonified(NotAvailableJsonBean())
+        error, response = self._make_request(self.info_config.get_air_quality_host())
+
+        if error:
+            return bean_jsonified(error)
 
         return bean_jsonified(AirQualityInterpretedReadingJson(
-            reading=json_to_bean(ori_r.json()),
+            reading=json_to_bean(response.json()),
             norm={AirQualityInterpretedReadingJson.PM_10: self.info_config.get_air_quality_norm_pm_10(),
                   AirQualityInterpretedReadingJson.PM_2_5: self.info_config.get_air_quality_norm_pm_2_5()}))
 
     def current_cesspit_level(self):
-        ori_r = requests.get(f'http://{self.info_config.get_cesspit_host()}')
-        if ori_r.status_code > 500:
-            return bean_jsonified(ErrorJsonBean(_error=f'Host {self.info_config.get_cesspit_host()} '
-                                                       f'returned HTTP status {ori_r.status_code}'))
-        elif ori_r.status_code != 200:
-            return bean_jsonified(NotAvailableJsonBean())
+        error, response = self._make_request(self.info_config.get_cesspit_host())
 
-        reading = json_to_bean(ori_r.json())
+        if error:
+            return bean_jsonified(error)
+
+        reading = json_to_bean(response.json())
         failure = (datetime.now() - reading.timestamp).total_seconds()/60 > \
             self.info_config.get_cesspit_delay_denoting_failure_min()
 
@@ -177,14 +213,38 @@ class InfoApp(Flask):
             warning_level_perc=self.info_config.get_cesspit_warning_level(),
             critical_level_perc=self.info_config.get_cesspit_critical_level()))
 
-    def pass_by(self, host):
-        ori_r = requests.get(f'http://{host}')
-        if ori_r.status_code > 500:
-            return bean_jsonified(ErrorJsonBean(_error=f'Host {host} returned HTTP status {ori_r.status_code}'))
-        elif ori_r.status_code != 200:
-            return bean_jsonified(NotAvailableJsonBean())
+    def current_daylight_status(self):
+        error, response = self._make_request(self.info_config.get_daylight_host())
 
-        return jsonify(ori_r.json())
+        if error:
+            return bean_jsonified(error)
+
+        _reading = json_to_bean(response.json())
+
+        # calculate time-of-day
+        _tod = TimeOfDay.NIGHT
+        _calc = SunsetCalculator()
+
+        if _calc.sunrise() < _reading.timestamp < _calc.sunset():
+            _day_duration_sec = (_calc.sunset() - _calc.sunrise()).total_seconds()
+            # morning is at most 20% of day duration away from sunset
+            if (_reading.timestamp - _calc.sunrise()).total_seconds() < 0.2*_day_duration_sec:
+                _tod = TimeOfDay.MORNING
+            elif (_calc.sunset() - _reading.timestamp).total_seconds() < 0.2*_day_duration_sec:
+                _tod = TimeOfDay.EVENING
+            else:
+                _tod = TimeOfDay.MIDDAY
+
+        return bean_jsonified(DaylightInterpretedReadingJson(
+            reading=_reading, time_of_day=_tod))
+
+    def pass_by(self, host):
+        error, response = self._make_request(host)
+
+        if error:
+            return bean_jsonified(error)
+
+        return jsonify(response.json())
 
 
 # flask config
@@ -214,6 +274,16 @@ def current_air_quality():
 @app.route('/current/cesspit')
 def current_cesspit_level():
     return app.current_cesspit_level()
+
+
+@app.route('/current/daylight')
+def current_daylight_status():
+    return app.current_daylight_status()
+
+
+@app.route('/current/rain')
+def current_rain_status():
+    return app.current_rain_status()
 
 
 if __name__ == '__main__':

@@ -222,7 +222,7 @@ class InfoApp(Flask):
 
         _reading = json_to_bean(response.json())
 
-        # calculate time-of-day
+        # calculate time-of-day, set sunset\sunshine
         _tod = TimeOfDay.NIGHT
         _calc = SunsetCalculator()
 
@@ -237,7 +237,19 @@ class InfoApp(Flask):
                 _tod = TimeOfDay.MIDDAY
 
         return bean_jsonified(DaylightInterpretedReadingJson(
-            reading=_reading, time_of_day=_tod))
+            reading=_reading, time_of_day=_tod,
+            sunrise=_calc.sunrise().strftime('%H:%M'),
+            sunset=_calc.sunset().strftime('%H:%M')))
+
+    def current_rain_status(self):
+        error, response = self._make_request(self.info_config.get_rain_host())
+
+        if error:
+            return bean_jsonified(error)
+
+        rain_intensity = json_to_bean(response.json())
+
+        return bean_jsonified(rain_intensity)
 
     def pass_by(self, host):
         error, response = self._make_request(host)

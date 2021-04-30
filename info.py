@@ -111,7 +111,8 @@ class InfoApp(Flask):
         error = None
 
         try:
-            response = requests.get(endpoint)
+            # there's direct Gigabit interface with the service; if does not respond within 1 sec, it is surely down
+            response = requests.get(endpoint, timeout=1)
             # this will raise HttpError on erroneous responses:
             response.raise_for_status()
             # ...and this will also trigger error for unexpected (although non-erroneous) status codes

@@ -23,6 +23,7 @@ class Configuration(ConfigParser):
     SECTION_CESSPIT = 'CESSPIT'
     SECTION_DAYLIGHT = 'DAYLIGHT'
     SECTION_RAIN = 'RAIN'
+    SECTION_SOIL_MOISTURE = 'SOIL-MOISTURE'
 
     PARAM_DB = 'db'
     PARAM_USER = 'user'
@@ -90,6 +91,9 @@ class Configuration(ConfigParser):
 
     def get_rain_host(self) -> str:
         return self.get(section=self.SECTION_RAIN, option=self.PARAM_HOST)
+
+    def get_soil_moisture_host(self) -> str:
+        return self.get(section=self.SECTION_SOIL_MOISTURE, option=self.PARAM_HOST)
 
 
 class InfoApp(Flask):
@@ -251,6 +255,19 @@ class InfoApp(Flask):
 
         return bean_jsonified(rain_intensity)
 
+    def current_soil_moisture(self):
+        error, response = self._make_request(self.info_config.get_soil_moisture_host())
+
+        if error:
+            return bean_jsonified(error)
+
+        results = json_to_bean(response.json())
+
+        for humidity in results:
+            humidity.current_value = int(humidity.current_value*10.0)/10.0
+
+        return bean_jsonified(results)
+
     def pass_by(self, host):
         error, response = self._make_request(host)
 
@@ -297,6 +314,10 @@ def current_daylight_status():
 @app.route('/current/rain')
 def current_rain_status():
     return app.current_rain_status()
+
+@app.route('/current/soil_moisture')
+def current_soil_moisture():
+    return app.current_soil_moisture()
 
 
 if __name__ == '__main__':

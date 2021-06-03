@@ -1,99 +1,11 @@
-from flask import Flask
-from configparser import ConfigParser, ExtendedInterpolation
-import sys
-import requests
+from flask import Flask, Response
+from flask import request as frequest
+from datetime import datetime
 
-from core.sbean import *
-from core.util import SunsetCalculator
-from persistence.schema import *
-
-
-class Configuration(ConfigParser):
-    PATH_INI = '/etc/bhs/rest-info/rest-info.ini'
-    PATH_ENV = '/etc/bhs/rest-info/env.ini'
-
-    PATH_INI_DEBUG = './test/test.config.ini'
-    PATH_ENV_DEBUG = '../BHS_Deployment/install/.credentials'
-
-    SECTION_DB = 'DATABASE'
-    SECTION_TEMPERATURE = 'TEMPERATURE'
-    SECTION_PRESSURE = 'PRESSURE'
-    SECTION_AIRQUALITY = 'AIR-QUALITY'
-    SECTION_HUMIDITY = 'HUMIDITY'
-    SECTION_CESSPIT = 'CESSPIT'
-    SECTION_DAYLIGHT = 'DAYLIGHT'
-    SECTION_RAIN = 'RAIN'
-    SECTION_SOIL_MOISTURE = 'SOIL-MOISTURE'
-
-    PARAM_DB = 'db'
-    PARAM_USER = 'user'
-    PARAM_PASSWORD = 'password'
-    PARAM_HOST = 'host'
-    PARAM_AQ_NORM_2_5 = 'norm.pm_2_5'
-    PARAM_AQ_NORM_10 = 'norm.pm_10'
-    PARAM_WARNING_LEVEL = 'warning-level'
-    PARAM_CRITICAL_LEVEL = 'critical-level'
-    PARAM_DELAY_DENOTING_FAILURE = 'delay-denoting-failure-min'
-
-    def __init__(self):
-        ConfigParser.__init__(self, interpolation=ExtendedInterpolation())
-        if not sys.gettrace():
-            self.read([self.PATH_ENV, self.PATH_INI])
-        else:
-            self.read([self.PATH_ENV_DEBUG, self.PATH_INI_DEBUG])
-
-    def get_db(self) -> str:
-        return self.get(section=self.SECTION_DB, option=self.PARAM_DB)
-
-    def get_db_user(self) -> str:
-        return self.get(section=self.SECTION_DB, option=self.PARAM_USER)
-
-    def get_db_password(self) -> str:
-        return self.get(section=self.SECTION_DB, option=self.PARAM_PASSWORD)
-
-    def get_db_host(self) -> str:
-        return self.get(section=self.SECTION_DB, option=self.PARAM_HOST)
-
-    def get_temperature_hosts(self) -> list:
-        return [self.get(section=self.SECTION_TEMPERATURE, option=option)
-                for option in self.options(self.SECTION_TEMPERATURE)
-                if option.startswith(self.PARAM_HOST)]
-
-    def get_pressure_host(self) -> str:
-        return self.get(section=self.SECTION_PRESSURE, option=self.PARAM_HOST)
-
-    def get_humidity_host(self) -> str:
-        return self.get(section=self.SECTION_HUMIDITY, option=self.PARAM_HOST)
-
-    def get_air_quality_host(self) -> str:
-        return self.get(section=self.SECTION_AIRQUALITY, option=self.PARAM_HOST)
-
-    def get_air_quality_norm_pm_2_5(self) -> int:
-        return self.getint(section=self.SECTION_AIRQUALITY, option=self.PARAM_AQ_NORM_2_5)
-
-    def get_air_quality_norm_pm_10(self) -> int:
-        return self.getint(section=self.SECTION_AIRQUALITY, option=self.PARAM_AQ_NORM_10)
-
-    def get_cesspit_host(self) -> str:
-        return self.get(section=self.SECTION_CESSPIT, option=self.PARAM_HOST)
-
-    def get_cesspit_warning_level(self) -> float:
-        return self.getfloat(section=self.SECTION_CESSPIT, option=self.PARAM_WARNING_LEVEL)
-
-    def get_cesspit_critical_level(self) -> float:
-        return self.getfloat(section=self.SECTION_CESSPIT, option=self.PARAM_CRITICAL_LEVEL)
-
-    def get_cesspit_delay_denoting_failure_min(self) -> int:
-        return self.getint(section=self.SECTION_CESSPIT, option=self.PARAM_DELAY_DENOTING_FAILURE)
-
-    def get_daylight_host(self) -> str:
-        return self.get(section=self.SECTION_DAYLIGHT, option=self.PARAM_HOST)
-
-    def get_rain_host(self) -> str:
-        return self.get(section=self.SECTION_RAIN, option=self.PARAM_HOST)
-
-    def get_soil_moisture_host(self) -> str:
-        return self.get(section=self.SECTION_SOIL_MOISTURE, option=self.PARAM_HOST)
+from localconfig import Configuration
+import remote
+import analysis.data as a_data
+import analysis.graph as a_graph
 
 
 class InfoApp(Flask):
@@ -101,180 +13,83 @@ class InfoApp(Flask):
     def __init__(self, name):
         Flask.__init__(self, import_name=name)
         self.info_config = Configuration()
-        self.persistence = Persistence(
+        self.data_source = a_data.AnalysisDataSource(
             db=self.info_config.get_db(),
             user=self.info_config.get_db_user(),
             password=self.info_config.get_db_password(),
             host=self.info_config.get_db_host())
-
-    def _make_request(self, endpoint: str) -> tuple:
-        if not endpoint.startswith('http://'):
-             endpoint = 'http://' + endpoint
-
-        response = None
-        error = None
-
-        try:
-            # there's direct Gigabit interface with the service; if does not respond within 1 sec, it is surely down
-            response = requests.get(endpoint, timeout=1)
-            # this will raise HttpError on erroneous responses:
-            response.raise_for_status()
-            # ...and this will also trigger error for unexpected (although non-erroneous) status codes
-            if response.status_code != 200:
-                error = ErrorJsonBean(f'Non-typical HTTP response code detected: {response.status_code}')
-
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-            error = NotAvailableJsonBean()
-
-        except requests.exceptions.TooManyRedirects:
-            error = ErrorJsonBean(f'Host {endpoint} is not responding correctly. '
-                                  f'Too many redirects (?)')
-
-        except requests.exceptions.HTTPError as e:
-            error = ErrorJsonBean(f'Host {endpoint} is responding, but with erroneous code. '
-                                  f'Details: {str(e)}')
-
-        except requests.exceptions.RequestException as e:
-            error = ErrorJsonBean(f'Host {endpoint} is not responding correctly. '
-                                  f'Details: {str(type(e))}: {str(e)}')
-
-        return error, response
+        self.remote_temperature = remote.Temperature(self.info_config.get_temperature_hosts())
+        self.remote_pressure = remote.TendencyValue(self.info_config.get_pressure_host())
+        self.remote_humidity_in = remote.TendencyValue(self.info_config.get_humidity_host())
+        self.remote_air_quality = remote.AirQuality(self.info_config.get_air_quality_host(),
+                                                    norm_pm_10=self.info_config.get_air_quality_norm_pm_10(),
+                                                    norm_pm_2_5=self.info_config.get_air_quality_norm_pm_2_5())
+        self.remote_cesspit = remote.Cesspit(self.info_config.get_cesspit_host(),
+                                             delay_denoting_failure_min=self.info_config.get_cesspit_delay_denoting_failure_min(),
+                                             warning_level=self.info_config.get_cesspit_warning_level(),
+                                             critical_level=self.info_config.get_cesspit_critical_level())
+        self.remote_daylight = remote.Daylight(self.info_config.get_daylight_host())
+        self.remote_rain = remote.Rain(self.info_config.get_rain_host())
+        self.remote_soil_moisture = remote.SoilMoisture(self.info_config.get_soil_moisture_host())
 
     def current_temperature(self):
-        hosts = self.info_config.get_temperature_hosts()
-
-        consolidated_response = list()
-        # make requests to all hosts
-        for host in hosts:
-            error, response = self._make_request(host)
-            if not error and response:
-                consolidated_response.extend(json_to_bean(response.json()))
-
-        if len(consolidated_response) < 1:
-            return bean_jsonified(NotAvailableJsonBean())
-
-        return bean_jsonified([self.convert_temperature(t) for t in consolidated_response])
-
-    def convert_temperature(self, temp: TemperatureReadingJson) -> TemperatureReadingJson:
-        """
-        This method is intended to adapt temperature from the raw reading to human-readable format
-
-        :param temp: the original temperature reading
-        :return: the same bean, but with modified content
-        """
-        temp.temperature = int(temp.temperature*10.0)/10.0
-        return temp
+        return self.remote_temperature.current_temperature()
 
     def current_pressure(self):
-        error, response = self._make_request(self.info_config.get_pressure_host())
-
-        if error:
-            return bean_jsonified(error)
-
-        pressure = json_to_bean(response.json())
-        pressure.current_value = int(pressure.current_value)
-        pressure.current_mean = int(pressure.current_mean)
-        pressure.previous_mean = int(pressure.previous_mean)
-
-        return bean_jsonified(pressure)
+        return self.remote_pressure.current_value()
 
     def current_humidity(self):
-        error, response = self._make_request(self.info_config.get_humidity_host())
-
-        if error:
-            return bean_jsonified(error)
-
-        humidity = json_to_bean(response.json())
-        humidity.current_value = int(humidity.current_value)
-        humidity.current_mean = int(humidity.current_mean)
-        humidity.previous_mean = int(humidity.previous_mean)
-
-        return bean_jsonified(humidity)
+        return self.remote_humidity_in.current_value()
 
     def current_air_quality(self):
-        error, response = self._make_request(self.info_config.get_air_quality_host())
-
-        if error:
-            return bean_jsonified(error)
-
-        return bean_jsonified(AirQualityInterpretedReadingJson(
-            reading=json_to_bean(response.json()),
-            norm={AirQualityInterpretedReadingJson.PM_10: self.info_config.get_air_quality_norm_pm_10(),
-                  AirQualityInterpretedReadingJson.PM_2_5: self.info_config.get_air_quality_norm_pm_2_5()}))
+        return self.remote_air_quality.current_value()
 
     def current_cesspit_level(self):
-        error, response = self._make_request(self.info_config.get_cesspit_host())
-
-        if error:
-            return bean_jsonified(error)
-
-        reading = json_to_bean(response.json())
-        failure = (datetime.now() - reading.timestamp).total_seconds()/60 > \
-            self.info_config.get_cesspit_delay_denoting_failure_min()
-
-        return bean_jsonified(CesspitInterpretedReadingJson(
-            reading=reading,
-            failure_detected=failure,
-            warning_level_perc=self.info_config.get_cesspit_warning_level(),
-            critical_level_perc=self.info_config.get_cesspit_critical_level()))
+        return self.remote_cesspit.current_value()
 
     def current_daylight_status(self):
-        error, response = self._make_request(self.info_config.get_daylight_host())
-
-        if error:
-            return bean_jsonified(error)
-
-        _reading = json_to_bean(response.json())
-
-        # calculate time-of-day, set sunset\sunshine
-        _tod = TimeOfDay.NIGHT
-        _calc = SunsetCalculator()
-
-        if _calc.sunrise() < _reading.timestamp < _calc.sunset():
-            _day_duration_sec = (_calc.sunset() - _calc.sunrise()).total_seconds()
-            # morning is at most 20% of day duration away from sunset
-            if (_reading.timestamp - _calc.sunrise()).total_seconds() < 0.2*_day_duration_sec:
-                _tod = TimeOfDay.MORNING
-            elif (_calc.sunset() - _reading.timestamp).total_seconds() < 0.2*_day_duration_sec:
-                _tod = TimeOfDay.EVENING
-            else:
-                _tod = TimeOfDay.MIDDAY
-
-        return bean_jsonified(DaylightInterpretedReadingJson(
-            reading=_reading, time_of_day=_tod,
-            sunrise=_calc.sunrise().strftime('%H:%M'),
-            sunset=_calc.sunset().strftime('%H:%M')))
+        return self.remote_daylight.current_status()
 
     def current_rain_status(self):
-        error, response = self._make_request(self.info_config.get_rain_host())
-
-        if error:
-            return bean_jsonified(error)
-
-        rain_intensity = json_to_bean(response.json())
-
-        return bean_jsonified(rain_intensity)
+        return self.remote_rain.current_status()
 
     def current_soil_moisture(self):
-        error, response = self._make_request(self.info_config.get_soil_moisture_host())
+        return self.remote_soil_moisture.current_humidity()
 
-        if error:
-            return bean_jsonified(error)
+    @staticmethod
+    def _datetime_fmt(to_convert: str):
+        return datetime.strptime(to_convert, '%Y-%m-%d')
 
-        results = json_to_bean(response.json())
+    def graph_temperature(self):
+        _sensor_location = frequest.args.get('location')
+        _the_date = frequest.args.get('date', type=self._datetime_fmt)
+        _title = frequest.args.get('title')
 
-        for humidity in results:
-            humidity.current_value = int(humidity.current_value*10.0)/10.0
+        _now = datetime.now()
+        _is_for_today = not _the_date or (_the_date.year == _now.year and
+                                          _the_date.month == _now.month and
+                                          _the_date.day == _now.day)
 
-        return bean_jsonified(results)
+        if not _the_date or _is_for_today:
+            _the_date = _now
 
-    def pass_by(self, host):
-        error, response = self._make_request(host)
+        # current temperature will be displayed only when displaying results for today
+        cur_temp = None
+        if _is_for_today:
+            cur_temp_reading = self.remote_temperature.current_temperature_for_sensor(_sensor_location)
+            if cur_temp_reading:
+                cur_temp = cur_temp_reading.timestamp, cur_temp_reading.temperature
+        else:
+            _the_date = _the_date.replace(hour=23, minute=59, second=59)
 
-        if error:
-            return bean_jsonified(error)
+        _graph = a_graph.DailyTemperatureGraph(
+            data_source=self.data_source,
+            sensor_loc=_sensor_location,
+            title=_title,
+            last_temp=cur_temp,
+            the_date=_the_date)
 
-        return jsonify(response.json())
+        return Response(_graph.plot_to_svg(), mimetype='image/svg+xml')
 
 
 # flask config
@@ -315,9 +130,15 @@ def current_daylight_status():
 def current_rain_status():
     return app.current_rain_status()
 
+
 @app.route('/current/soil_moisture')
 def current_soil_moisture():
     return app.current_soil_moisture()
+
+
+@app.route('/graph/temperature')
+def graph_temperature():
+    return app.graph_temperature()
 
 
 if __name__ == '__main__':

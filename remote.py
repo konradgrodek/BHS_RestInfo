@@ -6,6 +6,8 @@ import requests
 from core.sbean import *
 from core.util import SunsetCalculator
 
+from scipy import stats
+
 
 class RemoteConnection:
 
@@ -45,12 +47,33 @@ class RemoteConnection:
         return error, response
 
 
+class SimplyReroute(RemoteConnection):
+    """
+    Use this class for situations when the response from Service is completely not interpreted
+    """
+
+    def __init__(self, endpoint: str):
+        RemoteConnection.__init__(self, endpoint)
+
+    def reroute(self):
+        error, response = self.make_request()
+
+        if error:
+            return bean_jsonified(error)
+
+        if response is None:
+            return bean_jsonified(NotAvailableJsonBean())
+
+        return bean_jsonified(json_to_bean(response.json()))
+
+
 class Temperature:
 
     def __init__(self, endpoints: list):
         self.remotes = [RemoteConnection(ep) for ep in endpoints]
 
-    def _convert_temperature(self, temp: TemperatureReadingJson) -> TemperatureReadingJson:
+    @staticmethod
+    def _convert_temperature(temp: TemperatureReadingJson) -> TemperatureReadingJson:
         """
         This method is intended to adapt temperature from the raw reading to human-readable format
 
@@ -68,7 +91,7 @@ class Temperature:
             if not error and response:
                 consolidated_response.extend(json_to_bean(response.json()))
 
-        return [self._convert_temperature(t) for t in consolidated_response]
+        return [Temperature._convert_temperature(t) for t in consolidated_response]
 
     def current_temperature(self):
         """
@@ -165,7 +188,6 @@ class Daylight(RemoteConnection):
 
     def __init__(self, endpoint: str):
         RemoteConnection.__init__(self, endpoint)
-        self._calc = SunsetCalculator()
 
     def current_status(self):
         error, response = self.make_request()
@@ -176,38 +198,35 @@ class Daylight(RemoteConnection):
         _reading = json_to_bean(response.json())
 
         # calculate time-of-day, set sunset\sunshine
+        _calc = SunsetCalculator()
         _tod = TimeOfDay.NIGHT
 
-        if self._calc.sunrise() < _reading.timestamp < self._calc.sunset():
-            _day_duration_sec = (self._calc.sunset() - self._calc.sunrise()).total_seconds()
+        if _calc.sunrise() < _reading.timestamp < _calc.sunset():
+            _day_duration_sec = (_calc.sunset() - _calc.sunrise()).total_seconds()
             # morning is at most 20% of day duration away from sunset
-            if (_reading.timestamp - self._calc.sunrise()).total_seconds() < 0.2*_day_duration_sec:
+            if (_reading.timestamp - _calc.sunrise()).total_seconds() < 0.2*_day_duration_sec:
                 _tod = TimeOfDay.MORNING
-            elif (self._calc.sunset() - _reading.timestamp).total_seconds() < 0.2*_day_duration_sec:
+            elif (_calc.sunset() - _reading.timestamp).total_seconds() < 0.2*_day_duration_sec:
                 _tod = TimeOfDay.EVENING
             else:
                 _tod = TimeOfDay.MIDDAY
 
         return bean_jsonified(DaylightInterpretedReadingJson(
             reading=_reading, time_of_day=_tod,
-            sunrise=self._calc.sunrise().strftime('%H:%M'),
-            sunset=self._calc.sunset().strftime('%H:%M')))
+            sunrise=_calc.sunrise().strftime('%H:%M'),
+            sunset=_calc.sunset().strftime('%H:%M')))
 
 
-class Rain(RemoteConnection):
+class Rain:
+    """
+    This interface is not valid anymore, is replaced by Precipitation
+    """
 
-    def __init__(self, endpoint: str):
-        RemoteConnection.__init__(self, endpoint)
+    def __init__(self):
+        pass
 
     def current_status(self):
-        error, response = self.make_request()
-
-        if error:
-            return bean_jsonified(error)
-
-        rain_intensity = json_to_bean(response.json())
-
-        return bean_jsonified(rain_intensity)
+        return bean_jsonified(ErrorJsonBean('This interface is marked as unspported. Use precipitation instead'))
 
 
 class SoilMoisture(RemoteConnection):
@@ -227,3 +246,68 @@ class SoilMoisture(RemoteConnection):
             humidity.current_value = int(humidity.current_value*10.0)/10.0
 
         return bean_jsonified(results)
+
+
+class SolarPlant(RemoteConnection):
+
+    def __init__(self, endpoint: str, max_nominal_power: int):
+        RemoteConnection.__init__(self, endpoint)
+        self.maximum_nominal_power = max_nominal_power
+
+    def current_production(self):
+        """
+        Calculates percentages of maximum nominal production (may return more than 100%)
+        :return: the json response
+        """
+        error, response = self.make_request()
+
+        if error:
+            return bean_jsonified(error)
+
+        if response is None:
+            return bean_jsonified(NotAvailableJsonBean())
+
+        return bean_jsonified(SolarPlantInterpretedReadingJson(
+            reading=json_to_bean(response.json()),
+            maximum_nominal_power=self.maximum_nominal_power))
+
+
+class Precipitation(RemoteConnection):
+
+    def __init__(self, endpoint: str, mm_per_impulse: float):
+        RemoteConnection.__init__(self, endpoint)
+        self.mm_per_impulse = mm_per_impulse
+
+    def current_precipitation(self):
+        error, response = self.make_request()
+
+        if error:
+            return bean_jsonified(error)
+
+        if response is None:
+            return bean_jsonified(NotAvailableJsonBean())
+
+        results = json_to_bean(response.json())
+
+        _impulses = sorted(results.observations)
+        _total_precipitation = self.mm_per_impulse * len(_impulses)
+        _is_raining = False
+        if len(_impulses) > 0:
+            _time_since_last_impulse = (datetime.now() - _impulses[-1]).total_seconds()
+            if len(_impulses) == 1:
+                # very simple: it is raining if time from last observation is less than observation
+                # duration interpreted as minutes, for example: duration is 12h, time since last should be lt 12min
+                _is_raining = _time_since_last_impulse < results.observation_duration_h * 60
+            else:
+                # time since last observation is less than average time between impulses,
+                # eliminate outliers (> 1/10 of total duration)
+                _is_raining = _time_since_last_impulse < stats.tmean(
+                    [(_end - _start).total_seconds() for _start, _end in zip(_impulses[1:], _impulses[:-1])],
+                    limits=(0, results.observation_duration_h/(10*60*60)),
+                    inclusive=(False, False))
+
+        return bean_jsonified(PrecipitationObservationsReadingJson(
+            observation_duration_h=results.observation_duration_h,
+            last_observation_at=None if len(_impulses) == 0 else _impulses[-1],
+            precipitation_mm=_total_precipitation,
+            is_raining=_is_raining))

@@ -6,6 +6,7 @@ from localconfig import Configuration
 import remote
 import analysis.data as a_data
 import analysis.graph as a_graph
+from core.bean import ProgressBarRESTInterface, TemperatureGraphRESTInterface
 
 
 class InfoApp(Flask):
@@ -25,12 +26,20 @@ class InfoApp(Flask):
                                                     norm_pm_10=self.info_config.get_air_quality_norm_pm_10(),
                                                     norm_pm_2_5=self.info_config.get_air_quality_norm_pm_2_5())
         self.remote_cesspit = remote.Cesspit(self.info_config.get_cesspit_host(),
-                                             delay_denoting_failure_min=self.info_config.get_cesspit_delay_denoting_failure_min(),
+                                             delay_denoting_failure_min=self.info_config.
+                                             get_cesspit_delay_denoting_failure_min(),
                                              warning_level=self.info_config.get_cesspit_warning_level(),
                                              critical_level=self.info_config.get_cesspit_critical_level())
         self.remote_daylight = remote.Daylight(self.info_config.get_daylight_host())
-        self.remote_rain = remote.Rain(self.info_config.get_rain_host())
+        self.remote_rain = remote.Rain()
         self.remote_soil_moisture = remote.SoilMoisture(self.info_config.get_soil_moisture_host())
+        self.remote_solar_plant = remote.SolarPlant(self.info_config.get_solar_plant_host(),
+                                                    max_nominal_power=self.info_config.
+                                                    get_solar_plant_max_nominal_power())
+        self.remote_wind = remote.SimplyReroute(self.info_config.get_wind_host())
+        self.remote_precipitation = remote.Precipitation(
+            endpoint=self.info_config.get_rain_gauge_host(),
+            mm_per_impulse=self.info_config.get_rain_gauge_mm_per_impulse())
 
     def current_temperature(self):
         return self.remote_temperature.current_temperature()
@@ -53,17 +62,27 @@ class InfoApp(Flask):
     def current_rain_status(self):
         return self.remote_rain.current_status()
 
+    def current_precipitation(self):
+        return self.remote_precipitation.current_precipitation()
+
     def current_soil_moisture(self):
         return self.remote_soil_moisture.current_humidity()
+
+    def current_solar_power_production(self):
+        return self.remote_solar_plant.current_production()
+
+    def current_wind(self):
+        return self.remote_wind.reroute()
 
     @staticmethod
     def _datetime_fmt(to_convert: str):
         return datetime.strptime(to_convert, '%Y-%m-%d')
 
     def graph_temperature(self):
-        _sensor_location = frequest.args.get('location')
-        _the_date = frequest.args.get('date', type=self._datetime_fmt)
-        _title = frequest.args.get('title')
+        _temp_graph_interface = TemperatureGraphRESTInterface(_flask_args=frequest.args)
+        _sensor_location = _temp_graph_interface.sensor_location
+        _the_date = _temp_graph_interface.the_date
+        _title = _temp_graph_interface.graph_title
 
         _now = datetime.now()
         _is_for_today = not _the_date or (_the_date.year == _now.year and
@@ -90,6 +109,15 @@ class InfoApp(Flask):
             the_date=_the_date)
 
         return Response(_graph.plot_to_svg(), mimetype='image/svg+xml')
+
+    def horizontal_progress_bar(self):
+        progress_info = ProgressBarRESTInterface(_flask_args=frequest.args)
+        return Response(
+            a_graph.ProgressBar(
+                progress=progress_info.progress,
+                size=progress_info.size,
+                do_show_border=progress_info.do_show_border).plot_to_svg(),
+            mimetype='image/svg+xml')
 
 
 # flask config
@@ -136,9 +164,29 @@ def current_soil_moisture():
     return app.current_soil_moisture()
 
 
+@app.route('/current/solar_plant')
+def current_solar_plant():
+    return app.current_solar_power_production()
+
+
 @app.route('/graph/temperature')
 def graph_temperature():
     return app.graph_temperature()
+
+
+@app.route('/graph/progress')
+def graph_progress():
+    return app.horizontal_progress_bar()
+
+
+@app.route('/current/wind')
+def current_wind():
+    return app.current_wind()
+
+
+@app.route('/current/precipitation')
+def current_precipitation():
+    return app.current_precipitation()
 
 
 if __name__ == '__main__':

@@ -18,6 +18,13 @@ class AnalysisDataSource:
             self.persistence.temperature_daily_chronology(the_sensor=_the_sensor, the_date=the_date),
             the_date=the_date)
 
+    def rain_observations(self, the_date: datetime, hours_in_past: int):
+        return RainLastHours(
+            records=self.persistence.rain_observations_per_last_hours(the_date=the_date, hours_count=hours_in_past),
+            the_date=the_date,
+            hours_in_the_past=hours_in_past
+        )
+
 
 class TemperatureDailyChronology:
 
@@ -107,10 +114,11 @@ class TemperatureDailyChronology:
                 self._ph_temperatures.append(observations[0].temperature)
 
             # calculate min and max within the observations and then subtract from 'average' value to get errors
-            self._ph_errors_lower.append(abs(self._ph_temperatures[-1] - min(
-                [observation.temperature for observation in observations])))
-            self._ph_errors_upper.append(abs(self._ph_temperatures[-1] - max(
-                [observation.temperature for observation in observations])))
+            if len(self._ph_temperatures) > 0:
+                self._ph_errors_lower.append(abs(self._ph_temperatures[-1] - min(
+                    [observation.temperature for observation in observations])))
+                self._ph_errors_upper.append(abs(self._ph_temperatures[-1] - max(
+                    [observation.temperature for observation in observations])))
 
     def get_raw_timeline(self) -> list:
         if not self._raw_timeline:
@@ -160,6 +168,54 @@ class TemperatureDailyChronology:
         if not self._ph_errors_upper:
             self._init_ph()
         return self._ph_errors_upper
+
+
+class RainLastHours:
+
+    def __init__(self, records: list, the_date: datetime, hours_in_the_past: int):
+        """
+        Constructs time-line, a collection of time marks, each one at round hour
+        starting from housrs_count before the_date and ending at the_date (with minutes and seconds zeroed).
+        For each of these "hours" a count of impulses produced by Rain Gauge is returned
+        :param records list of datetime, the exact time when single impulse was recorded
+        :param the_date: the latest date till the statistics are produced
+        :param hours_in_the_past: number of hours "in the past" respecting the_date
+        """
+
+        self._records = records
+        self.the_date = the_date
+        self.hours_in_the_past = hours_in_the_past
+
+        _start = the_date.replace(minute=0, second=0, microsecond=0)
+        self._timeline = [_start + timedelta(hours=h-hours_in_the_past+1) for h in range(hours_in_the_past)]
+        _marks_ids_by_key = {self._timeline[_i].strftime('%Y%m%d%H'): _i for _i in range(len(self._timeline))}
+        self._counts = [0 for _m in self._timeline]
+        for _d in records:
+            _m_i = _marks_ids_by_key[_d.strftime('%Y%m%d%H')]
+            self._counts[_m_i] = self._counts[_m_i] + 1
+
+    def get_percipitation_per_hour_mm(self, mm_per_impulse: float) -> list:
+        """
+        Returns list of percipitation in mm recorded in subsequent hours - aligned to timeline.
+        :param mm_per_impulse: externally provided (becasue coming from configuration) the mm/impulse value
+        :return: list of floats, percipitation in mm recorded in subsequent hours
+        """
+        return [mm_per_impulse * _impulses for _impulses in self._counts]
+
+    def get_percipitation_per_hour_timeline(self) -> list:
+        """
+        Returns the round-hours timeline for which the observations are aligned
+        :return: list of datetimes
+        """
+        return self._timeline
+
+    def get_percipitation_mm(self, mm_per_impulse: float) -> float:
+        """
+        Returns total percipitation recorded within this period.
+        :param mm_per_impulse:
+        :return: float, in mm, the total percipitation
+        """
+        return mm_per_impulse * sum(self._counts)
 
 
 def analysis_data_source(credentials_file: str = None, config_file: str = None) -> AnalysisDataSource:

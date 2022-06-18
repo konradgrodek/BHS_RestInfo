@@ -16,8 +16,10 @@ class Configuration(ConfigParser):
     SECTION_HUMIDITY = 'HUMIDITY'
     SECTION_CESSPIT = 'CESSPIT'
     SECTION_DAYLIGHT = 'DAYLIGHT'
-    SECTION_RAIN = 'RAIN'
     SECTION_SOIL_MOISTURE = 'SOIL-MOISTURE'
+    SECTION_SOLAR_PLANT = 'SOLAR-PLANT'
+    SECTION_WIND = 'WIND'
+    SECTION_RAIN_GAUGE = 'RAIN-GAUGE'
 
     PARAM_DB = 'db'
     PARAM_USER = 'user'
@@ -28,6 +30,8 @@ class Configuration(ConfigParser):
     PARAM_WARNING_LEVEL = 'warning-level'
     PARAM_CRITICAL_LEVEL = 'critical-level'
     PARAM_DELAY_DENOTING_FAILURE = 'delay-denoting-failure-min'
+    PARAM_SOLAR_PLANT_NOMINAL_POWER = 'max-nominal-power'
+    PARAM_RAINGAUGE_MMPERHOUR = 'mm-per-hour'
 
     def __init__(self):
         ConfigParser.__init__(self, interpolation=ExtendedInterpolation())
@@ -83,9 +87,20 @@ class Configuration(ConfigParser):
     def get_daylight_host(self) -> str:
         return self.get(section=self.SECTION_DAYLIGHT, option=self.PARAM_HOST)
 
-    def get_rain_host(self) -> str:
-        return self.get(section=self.SECTION_RAIN, option=self.PARAM_HOST)
-
     def get_soil_moisture_host(self) -> str:
         return self.get(section=self.SECTION_SOIL_MOISTURE, option=self.PARAM_HOST)
 
+    def get_solar_plant_host(self) -> str:
+        return self.get(section=self.SECTION_SOLAR_PLANT, option=self.PARAM_HOST)
+
+    def get_solar_plant_max_nominal_power(self) -> int:
+        return self.getint(section=self.SECTION_SOLAR_PLANT, option=self.PARAM_SOLAR_PLANT_NOMINAL_POWER)
+
+    def get_wind_host(self) -> str:
+        return self.get(section=self.SECTION_WIND, option=self.PARAM_HOST)
+
+    def get_rain_gauge_host(self) -> str:
+        return self.get(section=self.SECTION_RAIN_GAUGE, option=self.PARAM_HOST)
+
+    def get_rain_gauge_mm_per_impulse(self) -> float:
+        return self.getfloat(section=self.SECTION_RAIN_GAUGE, option=self.PARAM_RAINGAUGE_MMPERHOUR)

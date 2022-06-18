@@ -1,6 +1,8 @@
 from flask import Flask, Response
 from flask import request as frequest
+from logging.config import dictConfig
 from datetime import datetime
+import sys
 
 from localconfig import Configuration
 import remote
@@ -118,6 +120,34 @@ class InfoApp(Flask):
                 size=progress_info.size,
                 do_show_border=progress_info.do_show_border).plot_to_svg(),
             mimetype='image/svg+xml')
+
+
+# logging config
+if sys.gettrace() is None:
+    dictConfig({
+        'version': 1,
+        'formatters': {
+            'default': {
+                'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
+            }
+        },
+        'handlers': {
+            'wsgi': {
+                'class': 'logging.StreamHandler',
+                'formatter': 'default'
+            },
+            'file': {
+                'class': 'logging.FileHandler',
+                'formatter': 'default',
+                'filename': '/var/log/bhs/rest-info.log',
+                'level': 'INFO'
+            }
+        },
+        'root': {
+            'level': 'INFO',
+            'handlers': ['wsgi', 'file']
+        }
+    })
 
 
 # flask config

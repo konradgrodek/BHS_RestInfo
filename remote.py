@@ -301,10 +301,13 @@ class Precipitation(RemoteConnection):
             else:
                 # time since last observation is less than average time between impulses,
                 # eliminate outliers (> 1/10 of total duration)
-                _is_raining = _time_since_last_impulse < stats.tmean(
-                    [(_end - _start).total_seconds() for _start, _end in zip(_impulses[1:], _impulses[:-1])],
-                    limits=(0, results.observation_duration_h/(10*60*60)),
-                    inclusive=(False, False))
+                try:
+                    _is_raining = bool(_time_since_last_impulse < stats.tmean(
+                        [(_end - _start).total_seconds() for _end, _start in zip(_impulses[1:], _impulses[:-1])],
+                        limits=(0, 60*60*results.observation_duration_h/10),
+                        inclusive=(False, False)))
+                except ValueError:  # "No array values within given limits"
+                    _is_raining = False
 
         return bean_jsonified(PrecipitationObservationsReadingJson(
             observation_duration_h=results.observation_duration_h,

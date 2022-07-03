@@ -4,6 +4,7 @@ This encapsulates all classes / methods used to prepare data stored in the datab
 from scipy import stats
 
 from persistence.analysis import *
+from core.util import SunsetCalculator
 
 
 class AnalysisDataSource:
@@ -15,7 +16,8 @@ class AnalysisDataSource:
         _the_sensor = self.persistence.get_sensor_by_location(sensor_location=sensor_location,
                                                               sensor_type_name=SENSORTYPE_TEMPERATURE)
         return TemperatureDailyChronology(
-            self.persistence.temperature_daily_chronology(the_sensor=_the_sensor, the_date=the_date),
+            the_sensor=_the_sensor,
+            records=self.persistence.temperature_daily_chronology(the_sensor=_the_sensor, the_date=the_date),
             the_date=the_date)
 
     def rain_observations(self, the_date: datetime, hours_in_past: int):
@@ -28,12 +30,15 @@ class AnalysisDataSource:
 
 class TemperatureDailyChronology:
 
-    def __init__(self, records: list, the_date: datetime = None):
+    def __init__(self, the_sensor: Sensor, records: list, the_date: datetime = None):
         if records is None:
             raise ValueError('Attempt to initialize temperature chronology without records')
+        if the_sensor is None:
+            raise ValueError('Attempt to initialize temperature chronology without sensor')
         if not the_date and len(records) > 0:
             the_date = records[0].timestamp
 
+        self.the_sensor = the_sensor
         self._raw_records = records
         self.the_date = the_date
         self._raw_timeline = None
@@ -43,21 +48,54 @@ class TemperatureDailyChronology:
         self._ph_errors_upper = None
         self._ph_errors_lower = None
         self._ph_errors = None
-        self._raw_min = None
-        self._raw_max = None
+        self._raw_min_daily = None
+        self._raw_max_daily = None
+        self._raw_avg_daily = None
+        self.sun_set_rise = SunsetCalculator(dt=the_date)
+        self._raw_min_day = None
+        self._raw_max_day = None
+        self._raw_avg_day = None
+        self._raw_min_night = None
+        self._raw_max_night = None
+        self._raw_avg_night = None
+
+    def is_valid(self):
+        return self._raw_records is not None and len(self._raw_records) > 0
 
     def _init_raw(self):
         self._raw_timeline = list()
         self._raw_temperatures = list()
-        self._raw_min = None
-        self._raw_max = None
+        self._raw_min_daily = None
+        self._raw_max_daily = None
+        self._raw_min_day = None
+        self._raw_max_day = None
+        self._raw_min_night = None
+        self._raw_max_night = None
+        _day = list()
+        _night = list()
         for record in self._raw_records:
             self._raw_timeline.append(record.timestamp)
             self._raw_temperatures.append(record.temperature)
-            if not self._raw_min or self._raw_min.temperature > record.temperature:
-                self._raw_min = record
-            if not self._raw_max or self._raw_max.temperature < record.temperature:
-                self._raw_max = record
+            if not self._raw_min_daily or self._raw_min_daily.temperature > record.temperature:
+                self._raw_min_daily = record
+            if not self._raw_max_daily or self._raw_max_daily.temperature < record.temperature:
+                self._raw_max_daily = record
+            if self.sun_set_rise.sunrise() < record.timestamp < self.sun_set_rise.sunset():
+                _day.append(record)
+                if not self._raw_min_day or self._raw_min_day.temperature > record.temperature:
+                    self._raw_min_day = record
+                if not self._raw_max_day or self._raw_max_day.temperature < record.temperature:
+                    self._raw_max_day = record
+            else:
+                _night.append(record)
+                if not self._raw_min_night or self._raw_min_night.temperature > record.temperature:
+                    self._raw_min_night = record
+                if not self._raw_max_night or self._raw_max_night.temperature < record.temperature:
+                    self._raw_max_night = record
+
+        self._raw_avg_daily = stats.tmean([_r.temperature for _r in self._raw_records])
+        self._raw_avg_day = stats.tmean([_r.temperature for _r in _day])
+        self._raw_avg_night = stats.tmean([_r.temperature for _r in _night])
 
     def _init_ph(self):
         self._ph_timeline = [datetime(year=self.the_date.year, month=self.the_date.month, day=self.the_date.day,
@@ -149,15 +187,50 @@ class TemperatureDailyChronology:
 
         return self._ph_timeline[-1], self._ph_temperatures[-1]
 
-    def get_min(self) -> tuple:
-        if not self._raw_min:
+    def get_min_daily(self) -> tuple:
+        if not self._raw_min_daily:
             self._init_raw()
-        return self._raw_min.timestamp, self._raw_min.temperature
+        return self._raw_min_daily.timestamp, self._raw_min_daily.temperature
 
-    def get_max(self) -> tuple:
-        if not self._raw_max:
+    def get_max_daily(self) -> tuple:
+        if not self._raw_max_daily:
             self._init_raw()
-        return self._raw_max.timestamp, self._raw_max.temperature
+        return self._raw_max_daily.timestamp, self._raw_max_daily.temperature
+
+    def get_min_day(self) -> tuple:
+        if not self._raw_min_day:
+            self._init_raw()
+        return self._raw_min_day.timestamp, self._raw_min_day.temperature
+
+    def get_max_day(self) -> tuple:
+        if not self._raw_max_day:
+            self._init_raw()
+        return self._raw_max_day.timestamp, self._raw_max_day.temperature
+
+    def get_min_night(self) -> tuple:
+        if not self._raw_min_night:
+            self._init_raw()
+        return self._raw_min_night.timestamp, self._raw_min_night.temperature
+
+    def get_max_night(self) -> tuple:
+        if not self._raw_max_night:
+            self._init_raw()
+        return self._raw_max_night.timestamp, self._raw_max_night.temperature
+
+    def get_avg_daily(self) -> float:
+        if self._raw_avg_daily is None:
+            self._init_raw()
+        return self._raw_avg_daily
+
+    def get_avg_day(self) -> float:
+        if self._raw_avg_day is None:
+            self._init_raw()
+        return self._raw_avg_day
+
+    def get_avg_night(self) -> float:
+        if self._raw_avg_night is None:
+            self._init_raw()
+        return self._raw_avg_night
 
     def get_lower_errors(self) -> list:
         if not self._ph_errors_lower:
@@ -216,6 +289,15 @@ class RainLastHours:
         :return: float, in mm, the total percipitation
         """
         return mm_per_impulse * sum(self._counts)
+
+
+class TemperatureStatistics:
+
+    def __init__(self,  _the_date: datetime):
+        pass
+
+
+# ----------------------------------------------------------------------------------------------------------------------
 
 
 def analysis_data_source(credentials_file: str = None, config_file: str = None) -> AnalysisDataSource:

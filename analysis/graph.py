@@ -15,14 +15,26 @@ class Graph:
     def __init__(self, size=None):
         self.figure, self.axes = plt.subplots(figsize=size)
 
+    @staticmethod
+    def _empty_svg():
+        return f'<svg ' \
+               f'width="1pt" height="1pt" viewBox="0 0 1 1" xmlns="http://www.w3.org/2000/svg" version="1.1">' \
+               f'</svg>'
+
     def prepare_plot(self):
         raise NotImplementedError()
 
     def plot_to_svg(self) -> bytes:
+        if not self.has_valid_data():
+            return bytes(Graph._empty_svg(), encoding="UTF-8")
+
         self.prepare_plot()
         res = io.BytesIO()
-        plt.savefig(res, format='svg')
+        plt.savefig(res, format='svg', bbox_inches='tight', pad_inches=0, transparent=True)
         return res.getvalue()
+
+    def has_valid_data(self):
+        return NotImplementedError()
 
 
 class DataGraph(Graph):
@@ -41,11 +53,11 @@ class DailyTemperatureGraph(DataGraph):
                  sensor_loc: str,
                  title: str,
                  last_temp: tuple = None,
-                 the_date: datetime = datetime.now()):
+                 the_date: datetime = None):
         DataGraph.__init__(self, data_source)
         self.the_date = the_date if the_date else datetime.now()
         self.data = data_source.temperature_daily_chronology(sensor_location=sensor_loc, the_date=self.the_date)
-        self.last_temp = last_temp if last_temp else self.data.get_perhour_last() if the_date else None
+        self.last_temp = last_temp if last_temp else self.data.get_perhour_last() if self.data.is_valid() else None
         self.title = title
 
     def prepare_plot(self):
@@ -60,10 +72,10 @@ class DailyTemperatureGraph(DataGraph):
             self.axes.scatter(self.last_temp[0], self.last_temp[1], marker='h')
             self.axes.annotate(f'  {self.last_temp[1]:.1f} \u2103', self.last_temp)
 
-        _min = self.data.get_min()
+        _min = self.data.get_min_daily()
         self.axes.scatter(_min[0], _min[1])
         self.axes.annotate(f'  {_min[1]:.1f} \u2103', _min)
-        _max = self.data.get_max()
+        _max = self.data.get_max_daily()
         self.axes.scatter(_max[0], _max[1])
         self.axes.annotate(f'  {_max[1]:.1f} \u2103', _max)
 
@@ -75,6 +87,9 @@ class DailyTemperatureGraph(DataGraph):
         self.axes.xaxis.set_major_formatter(DateFormatter('%H'))
         self.axes.xaxis.set_tick_params(labelrotation=90)
         self.axes.yaxis.set_major_formatter(ticker.StrMethodFormatter('{x:.0f}'))
+
+    def has_valid_data(self):
+        return self.data.is_valid()
 
 
 class ProgressBar(Graph):

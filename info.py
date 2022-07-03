@@ -1,14 +1,14 @@
 from flask import Flask, Response
 from flask import request as frequest
 from logging.config import dictConfig
-from datetime import datetime
 import sys
 
 from localconfig import Configuration
 import remote
 import analysis.data as a_data
 import analysis.graph as a_graph
-from core.bean import ProgressBarRESTInterface, TemperatureGraphRESTInterface
+from core.bean import ProgressBarRESTInterface, TemperatureGraphRESTInterface, TemperatureStatisticsRESTInterface
+from core.sbean import *
 
 
 class InfoApp(Flask):
@@ -75,6 +75,61 @@ class InfoApp(Flask):
 
     def current_wind(self):
         return self.remote_wind.reroute()
+
+    def statistics_temperature(self):
+        _temperature_stats_input = TemperatureStatisticsRESTInterface(_flask_args=frequest.args)
+        _sensor_location = _temperature_stats_input.sensor_location
+        _the_date = _temperature_stats_input.the_date
+
+        if datetime.now() < _the_date:
+            return bean_jsonified(NotAvailableJsonBean())
+
+        _daily_chronology = self.data_source.temperature_daily_chronology(
+            sensor_location=_sensor_location, the_date=_the_date)
+
+        if not _daily_chronology.is_valid():
+            return bean_jsonified(NotAvailableJsonBean())
+
+        _stats_24h = TemperatureStatistics(
+            _min_temp=_daily_chronology.get_min_daily()[1],
+            _min_at=_daily_chronology.get_min_daily()[0],
+            _max_temp=_daily_chronology.get_max_daily()[1],
+            _max_at=_daily_chronology.get_max_daily()[0],
+            _avg_temp=_daily_chronology.get_avg_daily(),
+            _timestamp_from=_the_date.replace(hour=0, minute=0, second=0, microsecond=0),
+            _timestamp_to=_the_date.replace(hour=23, minute=59, second=59, microsecond=999999),
+            _sensor_location=_sensor_location,
+            _sensor_reference=_daily_chronology.the_sensor.reference)
+
+        _stats_day = TemperatureStatistics(
+            _min_temp=_daily_chronology.get_min_day()[1],
+            _min_at=_daily_chronology.get_min_day()[0],
+            _max_temp=_daily_chronology.get_max_day()[1],
+            _max_at=_daily_chronology.get_max_day()[0],
+            _avg_temp=_daily_chronology.get_avg_day(),
+            _timestamp_from=_daily_chronology.sun_set_rise.sunrise(),
+            _timestamp_to=_daily_chronology.sun_set_rise.sunset(),
+            _sensor_location=_sensor_location,
+            _sensor_reference=_daily_chronology.the_sensor.reference)
+
+        _stats_night = TemperatureStatistics(
+            _min_temp=_daily_chronology.get_min_night()[1],
+            _min_at=_daily_chronology.get_min_night()[0],
+            _max_temp=_daily_chronology.get_max_night()[1],
+            _max_at=_daily_chronology.get_max_night()[0],
+            _avg_temp=_daily_chronology.get_avg_night(),
+            _timestamp_from=_the_date.replace(hour=0, minute=0, second=0, microsecond=0),
+            _timestamp_to=_the_date.replace(hour=23, minute=59, second=59, microsecond=999999),
+            _sensor_location=_sensor_location,
+            _sensor_reference=_daily_chronology.the_sensor.reference)
+
+        return bean_jsonified(TemperatureDailyStatistics(
+            _stats=_stats_24h,
+            _stats_night=_stats_night,
+            _stats_day=_stats_day,
+            _date=_the_date,
+            _location=_sensor_location,
+            _reference=_daily_chronology.the_sensor.reference))
 
     @staticmethod
     def _datetime_fmt(to_convert: str):
@@ -217,6 +272,11 @@ def current_wind():
 @app.route('/current/precipitation')
 def current_precipitation():
     return app.current_precipitation()
+
+
+@app.route('/history/temperature-daily')
+def statistics_temperature():
+    return app.statistics_temperature()
 
 
 if __name__ == '__main__':

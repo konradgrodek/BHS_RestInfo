@@ -20,6 +20,7 @@ class Configuration(ConfigParser):
     SECTION_SOLAR_PLANT = 'SOLAR-PLANT'
     SECTION_WIND = 'WIND'
     SECTION_RAIN_GAUGE = 'RAIN-GAUGE'
+    SECTION_WATER_TANK = 'WATER-TANK'
 
     PARAM_DB = 'db'
     PARAM_USER = 'user'
@@ -104,3 +105,6 @@ class Configuration(ConfigParser):
 
     def get_rain_gauge_mm_per_impulse(self) -> float:
         return self.getfloat(section=self.SECTION_RAIN_GAUGE, option=self.PARAM_RAINGAUGE_MMPERHOUR)
+
+    def get_water_tank_host(self) -> str:
+        return self.get(section=self.SECTION_WATER_TANK, option=self.PARAM_HOST)

@@ -41,6 +41,7 @@ class InfoApp(Flask):
         self.remote_precipitation = remote.Precipitation(
             endpoint=self.info_config.get_rain_gauge_host(),
             mm_per_impulse=self.info_config.get_rain_gauge_mm_per_impulse())
+        self.remote_water_tank = remote.SimplyReroute(self.info_config.get_water_tank_host())
 
     def current_temperature(self):
         return self.remote_temperature.current_temperature()
@@ -74,6 +75,9 @@ class InfoApp(Flask):
 
     def current_wind(self):
         return self.remote_wind.reroute()
+
+    def current_water_tank(self):
+        return self.remote_water_tank.reroute()
 
     def statistics_temperature(self):
         _temperature_stats_input = TemperatureStatisticsRESTInterface(_flask_args=frequest.args)
@@ -276,6 +280,11 @@ def current_precipitation():
 @app.route('/history/temperature-daily')
 def statistics_temperature():
     return app.statistics_temperature()
+
+
+@app.route('/current/water-tank')
+def current_water_tank():
+    return app.current_water_tank()
 
 
 if __name__ == '__main__':

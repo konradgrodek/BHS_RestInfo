@@ -7,7 +7,6 @@ from localconfig import Configuration
 import remote
 import analysis.data as a_data
 import analysis.graph as a_graph
-from core.bean import ProgressBarRESTInterface, TemperatureGraphRESTInterface, TemperatureStatisticsRESTInterface
 from core.sbean import *
 
 
@@ -87,9 +86,6 @@ class InfoApp(Flask):
         _daily_chronology = self.data_source.temperature_daily_chronology(
             sensor_location=_sensor_location, the_date=_the_date)
 
-        if not _daily_chronology.is_valid():
-            return bean_jsonified(NotAvailableJsonBean())
-
         _stats_24h = TemperatureStatistics(
             _min_temp=_daily_chronology.get_min_daily()[1],
             _min_at=_daily_chronology.get_min_daily()[0],
@@ -99,7 +95,8 @@ class InfoApp(Flask):
             _timestamp_from=_the_date.replace(hour=0, minute=0, second=0, microsecond=0),
             _timestamp_to=_the_date.replace(hour=23, minute=59, second=59, microsecond=999999),
             _sensor_location=_sensor_location,
-            _sensor_reference=_daily_chronology.the_sensor.reference)
+            _sensor_reference=_daily_chronology.the_sensor.reference) \
+            if _daily_chronology.is_valid() else NotAvailableJsonBean()
 
         _stats_day = TemperatureStatistics(
             _min_temp=_daily_chronology.get_min_day()[1],
@@ -110,7 +107,8 @@ class InfoApp(Flask):
             _timestamp_from=_daily_chronology.sun_set_rise.sunrise(),
             _timestamp_to=_daily_chronology.sun_set_rise.sunset(),
             _sensor_location=_sensor_location,
-            _sensor_reference=_daily_chronology.the_sensor.reference)
+            _sensor_reference=_daily_chronology.the_sensor.reference) \
+            if _daily_chronology.has_day_data() else NotAvailableJsonBean()
 
         _stats_night = TemperatureStatistics(
             _min_temp=_daily_chronology.get_min_night()[1],
@@ -121,7 +119,8 @@ class InfoApp(Flask):
             _timestamp_from=_the_date.replace(hour=0, minute=0, second=0, microsecond=0),
             _timestamp_to=_the_date.replace(hour=23, minute=59, second=59, microsecond=999999),
             _sensor_location=_sensor_location,
-            _sensor_reference=_daily_chronology.the_sensor.reference)
+            _sensor_reference=_daily_chronology.the_sensor.reference) \
+            if _daily_chronology.has_night_data() else NotAvailableJsonBean()
 
         return bean_jsonified(TemperatureDailyStatistics(
             _stats=_stats_24h,

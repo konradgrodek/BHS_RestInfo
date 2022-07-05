@@ -58,9 +58,19 @@ class TemperatureDailyChronology:
         self._raw_min_night = None
         self._raw_max_night = None
         self._raw_avg_night = None
+        _now = datetime.now()
+        self._is_for_today = self.the_date.year == _now.year \
+            and self.the_date.month == _now.month \
+            and self.the_date.day == _now.day
 
     def is_valid(self):
         return self._raw_records is not None and len(self._raw_records) > 0
+
+    def has_day_data(self):
+        return self.is_valid() and self.get_min_day()[0] is not None
+
+    def has_night_data(self):
+        return self.is_valid() and self.get_min_night()[0] is not None
 
     def _init_raw(self):
         self._raw_timeline = list()
@@ -93,9 +103,38 @@ class TemperatureDailyChronology:
                 if not self._raw_max_night or self._raw_max_night.temperature < record.temperature:
                     self._raw_max_night = record
 
-        self._raw_avg_daily = stats.tmean([_r.temperature for _r in self._raw_records])
-        self._raw_avg_day = stats.tmean([_r.temperature for _r in _day])
-        self._raw_avg_night = stats.tmean([_r.temperature for _r in _night])
+        if len(self._raw_records) > 0:
+            self._raw_avg_daily = stats.tmean([_r.temperature for _r in self._raw_records])
+        if len(_day) > 0:
+            self._raw_avg_day = stats.tmean([_r.temperature for _r in _day])
+        if len(_night) > 0:
+            self._raw_avg_night = stats.tmean([_r.temperature for _r in _night])
+
+        if len(_day) > 0:
+            if self._raw_min_night is None:
+                self._raw_min_night = _day[0] if _day[0].temperature < _day[-1].temperature else _day[-1]
+                self._raw_min_night.timestamp = self.sun_set_rise.sunrise() \
+                    if _day[0].temperature < _day[-1].temperature else self.sun_set_rise.sunset()
+                if self._is_for_today and self._raw_min_night.timestamp > self.the_date:
+                    self._raw_min_night.timestamp = self.sun_set_rise.sunrise()
+            if self._raw_max_night is None:
+                self._raw_max_night = _day[0] if _day[0].temperature > _day[-1].temperature else _day[-1]
+                self._raw_max_night.timestamp = self.sun_set_rise.sunrise() \
+                    if _day[0].temperature > _day[-1].temperature else self.sun_set_rise.sunset()
+                if self._is_for_today and self._raw_max_night.timestamp > self.the_date:
+                    self._raw_max_night.timestamp = self.sun_set_rise.sunrise()
+            if self._raw_avg_night is None:
+                self._raw_avg_night = (_day[0].temperature + _day[-1].temperature)/2
+
+        if not self._is_for_today or self.the_date > self.sun_set_rise.sunrise():
+            if self._raw_min_night is not None and self._raw_min_day is None:
+                self._raw_min_day = self._raw_min_night
+                self._raw_min_day.timestamp = self.sun_set_rise.sunset()
+            if self._raw_max_night is not None and self._raw_max_day is None:
+                self._raw_max_day = self._raw_max_night
+                self._raw_max_day.timestamp = self.sun_set_rise.sunset()
+            if self._raw_avg_night is not None and self._raw_avg_day is None:
+                self._raw_avg_day = self._raw_avg_night
 
     def _init_ph(self):
         self._ph_timeline = [datetime(year=self.the_date.year, month=self.the_date.month, day=self.the_date.day,
@@ -188,34 +227,40 @@ class TemperatureDailyChronology:
         return self._ph_timeline[-1], self._ph_temperatures[-1]
 
     def get_min_daily(self) -> tuple:
-        if not self._raw_min_daily:
+        if self._raw_min_daily is None:
             self._init_raw()
-        return self._raw_min_daily.timestamp, self._raw_min_daily.temperature
+        return (self._raw_min_daily.timestamp, self._raw_min_daily.temperature) \
+            if self._raw_min_daily is not None else (None, None)
 
     def get_max_daily(self) -> tuple:
-        if not self._raw_max_daily:
+        if self._raw_max_daily is None:
             self._init_raw()
-        return self._raw_max_daily.timestamp, self._raw_max_daily.temperature
+        return (self._raw_max_daily.timestamp, self._raw_max_daily.temperature) \
+            if self._raw_max_daily is not None else (None, None)
 
     def get_min_day(self) -> tuple:
-        if not self._raw_min_day:
+        if self._raw_min_day is None:
             self._init_raw()
-        return self._raw_min_day.timestamp, self._raw_min_day.temperature
+        return (self._raw_min_day.timestamp, self._raw_min_day.temperature) \
+            if self._raw_min_day is not None else (None, None)
 
     def get_max_day(self) -> tuple:
-        if not self._raw_max_day:
+        if self._raw_max_day is None:
             self._init_raw()
-        return self._raw_max_day.timestamp, self._raw_max_day.temperature
+        return (self._raw_max_day.timestamp, self._raw_max_day.temperature) \
+            if self._raw_max_day is not None else (None, None)
 
     def get_min_night(self) -> tuple:
-        if not self._raw_min_night:
+        if self._raw_min_night is None:
             self._init_raw()
-        return self._raw_min_night.timestamp, self._raw_min_night.temperature
+        return (self._raw_min_night.timestamp, self._raw_min_night.temperature) \
+            if self._raw_min_night is not None else (None, None)
 
     def get_max_night(self) -> tuple:
-        if not self._raw_max_night:
+        if self._raw_max_night is None:
             self._init_raw()
-        return self._raw_max_night.timestamp, self._raw_max_night.temperature
+        return (self._raw_max_night.timestamp, self._raw_max_night.temperature) \
+            if self._raw_max_night is not None else (None, None)
 
     def get_avg_daily(self) -> float:
         if self._raw_avg_daily is None:

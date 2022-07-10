@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
 from matplotlib import ticker
 from matplotlib import cm
-from datetime import timedelta
+from matplotlib import colors
 import io
 
 from analysis.data import *
@@ -13,7 +13,10 @@ from analysis.data import *
 
 class Graph:
     def __init__(self, size=None):
-        self.figure, self.axes = plt.subplots(figsize=size)
+        self.figure, self.axes = plt.subplots(figsize=size, clear=True)
+
+    def __del__(self):
+        plt.close(self.figure)
 
     @staticmethod
     def _empty_svg():
@@ -93,19 +96,23 @@ class DailyTemperatureGraph(DataGraph):
 
 
 class ProgressBar(Graph):
-    BACKGROUND = cm.get_cmap(name='Greys')(0.1)
+    BACKGROUND = cm.get_cmap(name='Greys')(0.3)
 
-    def __init__(self, progress: int, size: tuple, do_show_border=False, colormap_name='BuGn'):
+    def __init__(self, progress: int, size: tuple, do_show_border=False, colormap_name='BuGn', color_name=None):
         Graph.__init__(self, size)
         self.progress = progress
         self.show_border = do_show_border
-        self.colormap = cm.get_cmap(name=colormap_name)
+        self.color = colors.to_rgba(colors.get_named_colors_mapping().get(color_name)) \
+            if color_name is not None else cm.get_cmap(name=colormap_name)(self.progress / 100)
 
     def prepare_plot(self):
         bar_remaining = self.axes.barh('.', 100-self.progress, left=self.progress, color=self.BACKGROUND)
-        bar_progress = self.axes.barh('.', self.progress, color=self.colormap(self.progress/100))
+        bar_progress = self.axes.barh('.', self.progress, color=self.color)
         self.axes.set(xlim=(0, 100))
-        self.axes.bar_label(bar_progress, padding=3)
+        is_label_outside = self.progress < 30
+        font_color = 'black' if is_label_outside else 'black' if sum(self.color[:3]) > 1.2 else 'white'
+        self.axes.bar_label(bar_progress, padding=3, label_type='edge' if is_label_outside else 'center',
+                            fmt='%g %%', fontsize='medium', fontfamily='Lato', color=font_color)
         self.axes.yaxis.set_ticklabels([])
         self.axes.xaxis.set_ticklabels([])
         self.axes.set_yticks([])

@@ -176,7 +176,10 @@ class InfoApp(Flask):
             a_graph.ProgressBar(
                 progress=progress_info.progress,
                 size=progress_info.size,
-                do_show_border=progress_info.do_show_border).plot_to_svg(),
+                do_show_border=progress_info.do_show_border,
+                color_name=progress_info.color,
+                colormap_name=progress_info.colormap
+            ).plot_to_svg(),
             mimetype='image/svg+xml')
 
 

@@ -48,6 +48,8 @@ class TemperatureDailyChronology:
         self._ph_errors_upper = None
         self._ph_errors_lower = None
         self._ph_errors = None
+        self._ph_min_temperatures = None
+        self._ph_max_temperatures = None
         self._raw_min_daily = None
         self._raw_max_daily = None
         self._raw_avg_daily = None
@@ -147,6 +149,8 @@ class TemperatureDailyChronology:
         self._ph_errors_upper = list()
         self._ph_errors_lower = list()
         self._ph_errors = list()
+        self._ph_min_temperatures = list()
+        self._ph_max_temperatures = list()
 
         for _h in self._ph_timeline:
             # find both the closest reading in the past and in the future
@@ -192,10 +196,12 @@ class TemperatureDailyChronology:
 
             # calculate min and max within the observations and then subtract from 'average' value to get errors
             if len(self._ph_temperatures) > 0:
-                self._ph_errors_lower.append(abs(self._ph_temperatures[-1] - min(
-                    [observation.temperature for observation in observations])))
-                self._ph_errors_upper.append(abs(self._ph_temperatures[-1] - max(
-                    [observation.temperature for observation in observations])))
+                _min = min([observation.temperature for observation in observations])
+                _max = max([observation.temperature for observation in observations])
+                self._ph_errors_lower.append(abs(self._ph_temperatures[-1] - _min))
+                self._ph_errors_upper.append(abs(self._ph_temperatures[-1] - _max))
+                self._ph_min_temperatures.append(_min)
+                self._ph_max_temperatures.append(_max)
 
     def get_raw_timeline(self) -> list:
         if not self._raw_timeline:
@@ -225,6 +231,18 @@ class TemperatureDailyChronology:
             self._init_ph()
 
         return self._ph_timeline[-1], self._ph_temperatures[-1]
+
+    def get_perhour_min_temperatures(self) -> list:
+        if not self._ph_min_temperatures:
+            self._init_ph()
+
+        return self._ph_min_temperatures
+
+    def get_perhour_max_temperatures(self) -> list:
+        if not self._ph_max_temperatures:
+            self._init_ph()
+
+        return self._ph_max_temperatures
 
     def get_min_daily(self) -> tuple:
         if self._raw_min_daily is None:

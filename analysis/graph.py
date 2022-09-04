@@ -9,6 +9,7 @@ from matplotlib import colors
 import io
 
 from analysis.data import *
+from core.bean import TemperatureGraphRESTInterface
 
 
 class Graph:
@@ -55,21 +56,36 @@ class DailyTemperatureGraph(DataGraph):
                  data_source: AnalysisDataSource,
                  sensor_loc: str,
                  title: str,
+                 style: str,
                  last_temp: tuple = None,
                  the_date: datetime = None):
         DataGraph.__init__(self, data_source)
         self.the_date = the_date if the_date else datetime.now()
         self.data = data_source.temperature_daily_chronology(sensor_location=sensor_loc, the_date=self.the_date)
         self.last_temp = last_temp if last_temp else self.data.get_perhour_last() if self.data.is_valid() else None
+        self.style = style
         self.title = title
 
     def prepare_plot(self):
-        self.axes.errorbar(self.data.get_perhour_timeline(),
+        if self.style == TemperatureGraphRESTInterface.STYLE_ERRORBARS:
+            self.axes.errorbar(self.data.get_perhour_timeline(),
+                               self.data.get_perhour_temperatures(),
+                               yerr=[self.data.get_lower_errors(), self.data.get_upper_errors()],
+                               linestyle='solid',
+                               linewidth=2,
+                               elinewidth=1, ecolor='orange', capsize=5)
+        elif self.style == TemperatureGraphRESTInterface.STYLE_FILLBETWEEN:
+            self.axes.fill_between(self.data.get_perhour_timeline(),
+                                   self.data.get_perhour_min_temperatures(),
+                                   self.data.get_perhour_max_temperatures(),
+                                   color=cm.get_cmap(name='YlOrRd')(0.25))
+            self.axes.plot(self.data.get_perhour_timeline(),
                            self.data.get_perhour_temperatures(),
-                           yerr=[self.data.get_lower_errors(), self.data.get_upper_errors()],
-                           linestyle='solid',
-                           linewidth=2,
-                           elinewidth=1, ecolor='orange', capsize=5)
+                           linewidth=1)
+        else:
+            self.axes.plot(self.data.get_perhour_timeline(),
+                           self.data.get_perhour_temperatures(),
+                           linewidth=2)
 
         if self.last_temp:
             self.axes.scatter(self.last_temp[0], self.last_temp[1], marker='h')

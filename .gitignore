@@ -1,2 +1,3 @@
 # Project exclude paths
 /venv/
+/analysis/.ipynb_checkpoints/

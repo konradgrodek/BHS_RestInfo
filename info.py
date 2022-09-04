@@ -143,6 +143,7 @@ class InfoApp(Flask):
         _sensor_location = _temp_graph_interface.sensor_location
         _the_date = _temp_graph_interface.the_date
         _title = _temp_graph_interface.graph_title
+        _style = _temp_graph_interface.style
 
         _now = datetime.now()
         _is_for_today = not _the_date or (_the_date.year == _now.year and
@@ -166,7 +167,9 @@ class InfoApp(Flask):
             sensor_loc=_sensor_location,
             title=_title,
             last_temp=cur_temp,
-            the_date=_the_date)
+            the_date=_the_date,
+            style=_style
+        )
 
         return Response(_graph.plot_to_svg(), mimetype='image/svg+xml')
 

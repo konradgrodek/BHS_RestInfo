@@ -31,6 +31,7 @@ class InfoApp(Flask):
                                              get_cesspit_delay_denoting_failure_min(),
                                              warning_level=self.info_config.get_cesspit_warning_level(),
                                              critical_level=self.info_config.get_cesspit_critical_level())
+        self.remote_cesspit_config = remote.CesspitConfig(self.info_config.get_cesspit_config_host())
         self.remote_daylight = remote.Daylight(self.info_config.get_daylight_host())
         self.remote_rain = remote.Rain()
         self.remote_soil_moisture = remote.SoilMoisture(self.info_config.get_soil_moisture_host())
@@ -185,6 +186,17 @@ class InfoApp(Flask):
             ).plot_to_svg(),
             mimetype='image/svg+xml')
 
+    def graph_cesspit_last24h(self):
+        cesspit_config = self.remote_cesspit_config.current_value()
+
+        return Response(
+            a_graph.Last24hCesspitGraph(
+                data_source=self.data_source,
+                tank_full_mm=cesspit_config.full_level_mm if cesspit_config.has_succeeded() else None,
+                tank_empty_mm=cesspit_config.empty_level_mm if cesspit_config.has_succeeded() else None
+            ).plot_to_svg(),
+            mimetype='image/svg+xml')
+
 
 # logging config
 if sys.gettrace() is None:
@@ -271,6 +283,11 @@ def graph_temperature():
 @app.route('/graph/progress')
 def graph_progress():
     return app.horizontal_progress_bar()
+
+
+@app.route('/graph/cesspit/24h')
+def graph_cesspit_last24h():
+    return app.graph_cesspit_last24h()
 
 
 @app.route('/current/wind')

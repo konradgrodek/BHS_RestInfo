@@ -2,6 +2,7 @@
 This encapsulates all classes / methods used to prepare data stored in the database for further analysis (or just show)
 """
 from scipy import stats
+from functools import reduce
 
 from persistence.analysis import *
 from core.util import SunsetCalculator
@@ -12,7 +13,8 @@ class AnalysisDataSource:
     def __init__(self, db: str, host: str, user: str, password: str):
         self.persistence = AnalysisPersistence(db=db, host=host, user=user, password=password)
 
-    def temperature_daily_chronology(self, sensor_location: str, the_date: datetime = datetime.now()):
+    def temperature_daily_chronology(
+            self, sensor_location: str, the_date: datetime = datetime.now()):
         _the_sensor = self.persistence.get_sensor_by_location(sensor_location=sensor_location,
                                                               sensor_type_name=SENSORTYPE_TEMPERATURE)
         return TemperatureDailyChronology(
@@ -25,6 +27,32 @@ class AnalysisDataSource:
             records=self.persistence.rain_observations_per_last_hours(the_date=the_date, hours_count=hours_in_past),
             the_date=the_date,
             hours_in_the_past=hours_in_past
+        )
+
+    def cesspit_increase(self, the_date: datetime, hours_in_past: int = 0, days_in_past: int = 0):
+        """
+        Returns collection of cesspit level observations within
+        period given by end-date and number of preceeding days / hours
+        :param the_date: the end date of the time window of interest
+        :param hours_in_past: number of hours in past to be considered when calculating start date of observation window
+        :param days_in_past: number of days in past to be considered when calculating start date of observation window
+        :return: CesspitHistory object initialized with records from given observation window
+        """
+        if hours_in_past is None:
+            hours_in_past = 0
+        if days_in_past is None:
+            days_in_past = 0
+        if hours_in_past == 0 and days_in_past == 0:
+            raise ValueError(
+                f'Fetching cesspit observations require at least one: hours-in-past or days-in-past to be non-zero')
+        if the_date is None:
+            raise ValueError(f'The end-date is required to be provided when fetching cesspit observations')
+
+        _hours_count = hours_in_past + 24 * days_in_past
+        return CesspitHistory(
+            records=self.persistence.cesspit_observations(the_date,
+                                                          hours_count=_hours_count,
+                                                          full_day_included=days_in_past > 0)
         )
 
 
@@ -354,10 +382,207 @@ class RainLastHours:
         return mm_per_impulse * sum(self._counts)
 
 
-class TemperatureStatistics:
+class CesspitHistory:
+    """
+    The class is responsible to translate the collection of cesspit levels readings into data ready to show on charts
+    """
 
-    def __init__(self,  _the_date: datetime):
-        pass
+    def __init__(self, records: list):
+        """
+        Initializes the object and some of the pre-calculated data:
+        - detects the tank removals and splits the timeline into different periods
+        - calculates the deltas of levels
+        Note that levels and timelines aggregated per hour and day are only initialized with empty lists.
+        They are calculated when first used
+        :param records: the records as read from the database
+        """
+        self._records = records
+        _timeline = [_r.timestamp for _r in records]
+        _levels = [_r.level for _r in records]
+        # delta is "reversed" because levels are lowering (this is the "space left", not "space occupied")
+        _deltas = [prv - nxt for prv, nxt in zip(_levels[:-1], _levels[1:])]
+        # to make things easier, calculate indices of negative delta both for _deltas and _timelines
+        _removals_d = [_i for _i, _d in zip(range(len(_deltas)), _deltas) if _d < 0]
+        _removals_tm = [_i+1 for _i in _removals_d]
+        # continuous timeline and deltas
+        self._continuous_timelines = \
+            [_timeline[_ib:_ie] for _ib, _ie in zip([0] + _removals_tm, _removals_tm + [len(_timeline)])]
+        self._continuous_levels = \
+            [_levels[_ib:_ie] for _ib, _ie in zip([0] + _removals_tm, _removals_tm + [len(_timeline)])]
+
+        # this will keep only the timestamps relevant for deltas
+        # it will be at least one element shorter than continuous
+        self._deltas_timeline = reduce(
+            lambda x, y: x+y,
+            [_timeline[_ib+1:_ie] for _ib, _ie in zip([0]+_removals_tm, _removals_tm+[len(_timeline)])])
+        self._deltas = reduce(
+            lambda x, y: x+y,
+            [_deltas[_ib+1:_ie] for _ib, _ie in zip([-1]+_removals_d, _removals_d+[len(_deltas)])])
+
+        self._deltas_timeline_ph = []
+        self._deltas_ph = []
+
+        self._deltas_timeline_pd = []
+        self._deltas_pd = []
+
+    @staticmethod
+    def _cluster(clusters_top_values: list, objects_to_cluster: list, get_clustering_attr, get_value_attr):
+        """
+        Divides the input list of objects into clusters accordingly to defined boundaries.
+        Returns list of lists, where top list is of size top-values + 1;
+        each element of the list is also list (a cluster), composed of elements assigned to the cluster.
+        For example, if the top-values = [2022-09-17, 2022-09-18], the result will be in following format:
+        [
+            [all-objects with get_clustering_attr < 2022-09-17],
+            [2022-09-17 < get_clustering_attr <= 2022-09-18]
+            [get_clustering_attr > 2022-09-18]
+        ]
+        Again, note that result set is longer than provided top-boundaries!
+        :param clusters_top_values: defines the top boundaries of the clusters
+        :param objects_to_cluster: the objects to be clustered
+        :param get_clustering_attr: the method which will be applied on the object to get value,
+        which can be compared with the boundaries
+        :param get_value_attr: the method, which will be applied to the object to get value,
+        which will be appended to the cluster
+        :return: list of lists of objects returned by get_value_attr
+        """
+        _clusters_def = list(zip([None] + clusters_top_values, clusters_top_values + [None],
+                            range(len(clusters_top_values)+1)))
+        _clustered = [list() for _i in range(len(clusters_top_values)+1)]
+        for _vattr, _val in [(get_clustering_attr(_v), get_value_attr(_v)) for _v in objects_to_cluster]:
+            for _cluster_def in _clusters_def:
+                if (_cluster_def[0] is None or _vattr > _cluster_def[0]) \
+                        and (_cluster_def[1] is None or _vattr <= _cluster_def[1]):
+                    _clustered[_cluster_def[2]].append(_val)
+                    break
+        return _clustered
+
+    @staticmethod
+    def _fill_perc(level_mm: int, tank_full_mm: int, tank_empty_mm: int) -> float:
+        """
+        For given measured level calculates what is actual fill percentage of the tank
+        :param level_mm: the measured level (measurement is from the top!)
+        :param tank_full_mm: the level when the tank is full
+        :param tank_empty_mm: the level, in millimeters, when the tank is assumed to be empty
+        :return: the fill percenage of the cesspit
+        """
+        return 100 * (tank_empty_mm - level_mm) / (tank_empty_mm - tank_full_mm)
+
+    def _init_ph(self):
+        """
+        Lazy-initialization of the aggregates per-hour
+        :return: nothing
+        """
+        # per-hour timeline
+        _start = self._records[0].timestamp.replace(minute=0, second=0, microsecond=0)
+        _stop = self._records[-1].timestamp
+        _hours_count = int((_stop - _start).total_seconds() / (60 * 60)) + 1
+        self._deltas_timeline_ph = [_start + timedelta(hours=h) for h in range(_hours_count)]
+        _deltas_clusterd_ph = CesspitHistory._cluster(
+            self._deltas_timeline_ph[1:], list(zip(self._deltas_timeline, self._deltas)), lambda x: x[0], lambda x: x[1])
+        self._deltas_ph = [0 if len(_cl) == 0 else sum(_cl) for _cl in _deltas_clusterd_ph]
+
+    def _init_pd(self):
+        """
+        Lazy-initializtion of the per-day aggregates
+        :return: nothing
+        """
+        # per-day timeline
+        _start = self._records[0].timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+        _stop = self._records[-1].timestamp
+        _days_count = int((_stop - _start).total_seconds() / (24 * 60 * 60)) + 1
+        self._deltas_timeline_pd = [_start + timedelta(days=d) for d in range(_days_count)]
+        _deltas_clustered_pd = CesspitHistory._cluster(
+            self._deltas_timeline_pd[1:], list(zip(self._deltas_timeline, self._deltas)), lambda x: x[0], lambda x: x[1])
+        self._deltas_pd = [0 if len(_cl) == 0 else sum(_cl) for _cl in _deltas_clustered_pd]
+
+    def get_continuous_timeline(self) -> list:
+        """
+        Returns all timelines, in separated lists, for each cycles detected within period
+        (cycles are separated by cesspit removals)
+        :return: list of lists of datetime (time marks of readings)
+        """
+        return self._continuous_timelines
+
+    def get_continuous_levels(self) -> list:
+        """
+        Returns all levels within given period, divided into cycles - therefore there could be more than one
+        :return: list of list with readings - note: these are original levels, i.e. the measured distances
+        from sensor to the sevage level
+        """
+        return self._continuous_levels
+
+    def get_continuous_fill_perc(self, tank_full_mm: int, tank_empty_mm: int) -> list:
+        """
+        Reuturns all the fill levels (in percentages) of the cesspit within given period,
+        split by removals (if any detected)
+        :param tank_full_mm: the level, which denotes "full tank"
+        :param tank_empty_mm: the level, which denotes "empty tank"
+        :return: list of lists of floats (percentages)
+        """
+        return [
+            [CesspitHistory._fill_perc(_lvl, tank_full_mm, tank_empty_mm) for _lvl in _sub_line]
+            for _sub_line in self._continuous_levels]
+
+    def get_per_hour_timeline(self) -> list:
+        """
+        Returns "full hour only" time-marks within given period. Note: these are not read readings,
+        these are generated artificially full-hours within given period.
+        :return: list of datetime, all full-hours within given period, without gaps
+        """
+        if len(self._deltas_timeline_ph) == 0:
+            self._init_ph()
+        return self._deltas_timeline_ph
+
+    def get_per_hour_deltas(self) -> list:
+        """
+        Calculates (if not done yet) and returns aggregations per each full hour how much available space
+        in the cesspit decreased
+        :return: list of ints of the same size as get_per_hour_timeline returns
+        """
+        if len(self._deltas_ph) == 0:
+            self._init_ph()
+        return self._deltas_ph
+
+    def get_per_hour_deltas_perc(self, tank_full_mm: int, tank_empty_mm: int) -> list:
+        """
+        Similar to get_per_hour_deltas, but the decrease levels are translated into percentages of the whole tank
+        :param tank_full_mm: the level, which is assumed to reported for full tank
+        :param tank_empty_mm: the level, which is assumed to reported for empty tank
+        :return: list of floats (percentages) of the same size as get_per_hour_timeline returns
+        """
+        if len(self._deltas_ph) == 0:
+            self._init_ph()
+        return [100 * _d / (tank_empty_mm - tank_full_mm) for _d in self._deltas_ph]
+
+    def get_per_day_timeline(self) -> list:
+        """
+        Returns time marks, one per each day within given period in form YYYY-MM-DD 00:00:00
+        :return: the list of "full day" time marks
+        """
+        if len(self._deltas_timeline_pd) == 0:
+            self._init_pd()
+        return self._deltas_timeline_pd
+
+    def get_per_day_deltas(self) -> list:
+        """
+        Returns aggregated (summed up) decreases of cesspit levels per each day within given period
+        :return: list of int (deltas, in mm, how much the available space decreased daily)
+        """
+        if len(self._deltas_pd) == 0:
+            self._init_pd()
+        return self._deltas_pd
+
+    def get_per_day_deltas_perc(self, tank_full: int, tank_empty: int) -> list:
+        """
+        Prepares (if needed) and returns the daily decrease in percentages of full tank of the available space left
+        :param tank_full: the level, which is assumed to reported for full tank
+        :param tank_empty: the level, which is assumed to reported for empty tank
+        :return:
+        """
+        if len(self._deltas_pd) == 0:
+            self._init_pd()
+        return [100*_d/(tank_empty - tank_full) for _d in self._deltas_pd]
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -416,13 +641,14 @@ def analysis_data_source(credentials_file: str = None, config_file: str = None) 
 
     return AnalysisDataSource(db=_db, user=_user, password=_password, host=_host)
 
+# ----------------------------------------------------------------------------------------------------------------------
+
 
 if __name__ == "__main__":
     db = analysis_data_source()
-    t = db.temperature_daily_chronology('External')
-    print(t.get_perhour_teperatures())
-    print(t.get_perhour_timeline())
-    print(t.get_perhour_last())
-    print(t.get_raw_teperatures())
-    print(t.get_raw_timeline())
-    print(t.get_raw_last())
+    t = db.cesspit_increase(the_date=datetime.now(), hours_in_past=7*24+15)
+    print(t.get_per_day_timeline())
+    print(t.get_per_day_deltas())
+    print(t.get_per_hour_timeline())
+    print(t.get_per_hour_deltas())
+

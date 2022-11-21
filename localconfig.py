@@ -33,6 +33,7 @@ class Configuration(ConfigParser):
     PARAM_DELAY_DENOTING_FAILURE = 'delay-denoting-failure-min'
     PARAM_SOLAR_PLANT_NOMINAL_POWER = 'max-nominal-power'
     PARAM_RAINGAUGE_MMPERHOUR = 'mm-per-hour'
+    PARAM_CONFIG = 'config'
 
     def __init__(self):
         ConfigParser.__init__(self, interpolation=ExtendedInterpolation())
@@ -75,6 +76,10 @@ class Configuration(ConfigParser):
 
     def get_cesspit_host(self) -> str:
         return self.get(section=self.SECTION_CESSPIT, option=self.PARAM_HOST)
+
+    def get_cesspit_config_host(self) -> str:
+        return self.get(section=self.SECTION_CESSPIT, option=self.PARAM_HOST) + \
+               self.get(section=self.SECTION_CESSPIT, option=self.PARAM_CONFIG)
 
     def get_cesspit_warning_level(self) -> float:
         return self.getfloat(section=self.SECTION_CESSPIT, option=self.PARAM_WARNING_LEVEL)

@@ -184,6 +184,26 @@ class Cesspit(RemoteConnection):
             critical_level_perc=self.critical_level))
 
 
+class CesspitConfig(RemoteConnection):
+
+    def __init__(self, endpoint: str):
+        RemoteConnection.__init__(self, endpoint)
+        self.config = None
+
+    def current_value(self):
+        if self.config is not None:
+            return self.config
+
+        error, response = self.make_request()
+
+        if error:
+            return ErrorJsonBean(_error=f'The cesspit min-max levels were unable to fetch. Error code: {error}')
+
+        self.config = json_to_bean(response.json())
+
+        return self.config
+
+
 class Daylight(RemoteConnection):
 
     def __init__(self, endpoint: str):

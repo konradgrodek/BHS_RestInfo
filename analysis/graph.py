@@ -2,7 +2,7 @@
 The file collects routines used to prepare matplotlib graphs
 """
 import matplotlib.pyplot as plt
-from matplotlib.dates import DateFormatter
+from matplotlib.dates import DateFormatter, HourLocator
 from matplotlib import ticker
 from matplotlib import cm
 from matplotlib import colors
@@ -135,6 +135,76 @@ class ProgressBar(Graph):
         self.axes.set_xticks([])
         if not self.show_border:
             self.axes.set_axis_off()
+
+
+class Last24hCesspitGraph(DataGraph):
+
+    def __init__(self, data_source: AnalysisDataSource, tank_full_mm: int, tank_empty_mm: int):
+        """
+        Constructs the object responsible for plotting the graph of Cesspit usage during last 24h
+        :param data_source: the AnalysisDataSource, which will be used to query the data
+        :param tank_full_mm: the configuration parameter: level of tank being full
+        :param tank_empty_mm: the configuration parameter: level of tank being empty
+        """
+        DataGraph.__init__(self, data_source)
+        self.data = data_source.cesspit_increase(
+            the_date=datetime.now(), hours_in_past=24)
+        self.tank_full_mm = tank_full_mm
+        self.tank_empty_mm = tank_empty_mm
+        self.bar_color_map = cm.get_cmap(name='RdYlGn_r')
+        self.estimated_max_hourly_gain_perc = 2.0
+        self.estimated_avg_hourly_gain_perc = 0.1
+
+    def prepare_plot(self):
+        """
+        The graph is composed of two plots:
+        - bars per each hour, showing level increase at certain hour
+        - continuous line showing the level
+        :return: None, just prepares the plot
+        """
+        _axis_continuous = self.axes
+        _axis_continuous.xaxis.set_tick_params(labelrotation=90)
+        _axis_continuous.xaxis.set_major_formatter(DateFormatter('%H'))
+        _axis_continuous.xaxis.set_minor_locator(HourLocator())
+        _axis_daily = self.axes.twinx()
+        _axis_daily.xaxis.set_tick_params(labelrotation=90)
+        _axis_daily.xaxis.set_major_formatter(DateFormatter('%H'))
+        _axis_daily.xaxis.set_minor_locator(HourLocator())
+
+        # vertical bars for per-hour increase
+        _timeline_per_hour = self.data.get_per_hour_timeline()
+        _deltas_per_hour = self.data.get_per_hour_deltas_perc(
+            tank_full_mm=self.tank_full_mm, tank_empty_mm=self.tank_empty_mm)
+        _bars = _axis_daily.bar(_timeline_per_hour, _deltas_per_hour, width=0.02,
+                                color=[self._bar_color(_d) for _d in _deltas_per_hour])
+        _axis_daily.bar_label(_bars, ['' if _d < 0.1 else f'+{_d:.1f}%' for _d in _deltas_per_hour], rotation=90)
+
+        # continuous line for the actual state
+        _timeline_continuous = self.data.get_continuous_timeline()
+        _fill_perc_continuous = self.data.get_continuous_fill_perc(
+            tank_full_mm=self.tank_full_mm, tank_empty_mm=self.tank_empty_mm)
+
+        for _tm, _lv in zip(_timeline_continuous, _fill_perc_continuous):
+            _axis_continuous.plot(_tm, _lv, color='red', linewidth=2)
+
+        _axis_continuous.set_ylim(0, 100)
+        _axis_continuous.set_ylabel(f'Wypełnienie [%]')
+        _axis_daily.set_ylim(0, max(self.estimated_max_hourly_gain_perc, max(_deltas_per_hour)))
+        _axis_daily.set_ylabel(f'\u0394 [%]')
+
+    def _bar_color(self, _delta: float):
+        """
+        Having provided delta value, a color of the bar showing increase is returned
+        :param _delta:
+        :return:
+        """
+        return self.bar_color_map(
+            (_delta - self.estimated_avg_hourly_gain_perc) /
+            (self.estimated_max_hourly_gain_perc - self.estimated_avg_hourly_gain_perc)
+        )
+
+    def has_valid_data(self):
+        return self.tank_full_mm is not None and self.tank_empty_mm is not None
 
 
 if __name__ == '__main__':

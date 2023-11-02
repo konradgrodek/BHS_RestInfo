@@ -29,11 +29,13 @@ class AnalysisDataSource:
             hours_in_the_past=hours_in_past
         )
 
-    def cesspit_increase(self, the_date: datetime, hours_in_past: int = 0, days_in_past: int = 0):
+    def cesspit_increase(self, the_date: datetime, tank_full_mm: int, tank_empty_mm: int, hours_in_past: int = 0, days_in_past: int = 0):
         """
         Returns collection of cesspit level observations within
         period given by end-date and number of preceeding days / hours
         :param the_date: the end date of the time window of interest
+        :param tank_full_mm: the level, which is assumed to reported for full tank
+        :param tank_empty_mm: the level, which is assumed to reported for empty tank
         :param hours_in_past: number of hours in past to be considered when calculating start date of observation window
         :param days_in_past: number of days in past to be considered when calculating start date of observation window
         :return: CesspitHistory object initialized with records from given observation window
@@ -49,10 +51,19 @@ class AnalysisDataSource:
             raise ValueError(f'The end-date is required to be provided when fetching cesspit observations')
 
         _hours_count = hours_in_past + 24 * days_in_past
+        _records = self.persistence.cesspit_observations(
+                the_date,
+                hours_count=_hours_count,
+                full_day_included=days_in_past > 0
+            )
         return CesspitHistory(
-            records=self.persistence.cesspit_observations(the_date,
-                                                          hours_count=_hours_count,
-                                                          full_day_included=days_in_past > 0)
+            records=_records,
+            adherent_previous_record=None if len(_records) == 0
+            else self.persistence.cesspit_adherent_observation(_records[0].timestamp, is_next=False),
+            adherent_next_record=None if len(_records) == 0
+            else self.persistence.cesspit_adherent_observation(_records[-1].timestamp, is_next=True),
+            tank_full_mm=tank_full_mm,
+            tank_empty_mm=tank_empty_mm
         )
 
 
@@ -387,18 +398,36 @@ class CesspitHistory:
     The class is responsible to translate the collection of cesspit levels readings into data ready to show on charts
     """
 
-    def __init__(self, records: list):
+    def __init__(self, records: list, adherent_previous_record: TankLevel, adherent_next_record: TankLevel, tank_full_mm: int, tank_empty_mm: int):
         """
         Initializes the object and some of the pre-calculated data:
         - detects the tank removals and splits the timeline into different periods
-        - calculates the deltas of levels
+        - calculates the deltas of levels.
+        By providing the records that direcly adhere to range under consideration, "artificial records"
+        are added with the timestamp modified, pointing to 00:00:00 of the first record and 23:59:59 of the last record.
+        This is to avoid continuous charts starting in the middle of the day.
         Note that levels and timelines aggregated per hour and day are only initialized with empty lists.
         They are calculated when first used
         :param records: the records as read from the database
+        :param adherent_previous_record the record that directly precedes the range under consideration
+        :param adherent_next_record the record that directly follows the range under consideration
+        :param tank_full_mm: the level, which is assumed to reported for full tank
+        :param tank_empty_mm: the level, which is assumed to reported for empty tank
         """
-        self._records = records
+        self._records = records.copy()
+        self._tank_full_mm = tank_full_mm
+        self._tank_empty_mm = tank_empty_mm
         _timeline = [_r.timestamp for _r in records]
-        _levels = [_r.level for _r in records]
+        _levels = [_r.level if _r.level > self._tank_full_mm else self._tank_full_mm for _r in records]
+        if adherent_previous_record is not None:
+            self._records = [adherent_previous_record] + self._records
+            _timeline = [records[0].timestamp.replace(hour=0, minute=0, second=0)] + _timeline
+            _levels = [adherent_previous_record.level] + _levels
+        if adherent_next_record is not None:
+            self._records.append(adherent_next_record)
+            _timeline.append(records[-1].timestamp.replace(hour=23, minute=59, second=59))
+            _levels.append(adherent_next_record.level)
+
         # delta is "reversed" because levels are lowering (this is the "space left", not "space occupied")
         _deltas = [prv - nxt for prv, nxt in zip(_levels[:-1], _levels[1:])]
         # to make things easier, calculate indices of negative delta both for _deltas and _timelines
@@ -424,6 +453,12 @@ class CesspitHistory:
 
         self._deltas_timeline_pd = []
         self._deltas_pd = []
+
+    def is_valid(self):
+        return len(self._records) > 0 \
+            and self._tank_full_mm is not None \
+            and self._tank_empty_mm is not None \
+            and self._tank_full_mm < self._tank_empty_mm
 
     @staticmethod
     def _cluster(clusters_top_values: list, objects_to_cluster: list, get_clustering_attr, get_value_attr):
@@ -457,8 +492,7 @@ class CesspitHistory:
                     break
         return _clustered
 
-    @staticmethod
-    def _fill_perc(level_mm: int, tank_full_mm: int, tank_empty_mm: int) -> float:
+    def _fill_perc(self, level_mm: int) -> float:
         """
         For given measured level calculates what is actual fill percentage of the tank
         :param level_mm: the measured level (measurement is from the top!)
@@ -466,7 +500,7 @@ class CesspitHistory:
         :param tank_empty_mm: the level, in millimeters, when the tank is assumed to be empty
         :return: the fill percenage of the cesspit
         """
-        return 100 * (tank_empty_mm - level_mm) / (tank_empty_mm - tank_full_mm)
+        return 100 * (self._tank_empty_mm - level_mm) / (self._tank_empty_mm - self._tank_full_mm)
 
     def _init_ph(self):
         """
@@ -512,16 +546,14 @@ class CesspitHistory:
         """
         return self._continuous_levels
 
-    def get_continuous_fill_perc(self, tank_full_mm: int, tank_empty_mm: int) -> list:
+    def get_continuous_fill_perc(self) -> list:
         """
         Reuturns all the fill levels (in percentages) of the cesspit within given period,
         split by removals (if any detected)
-        :param tank_full_mm: the level, which denotes "full tank"
-        :param tank_empty_mm: the level, which denotes "empty tank"
         :return: list of lists of floats (percentages)
         """
         return [
-            [CesspitHistory._fill_perc(_lvl, tank_full_mm, tank_empty_mm) for _lvl in _sub_line]
+            [self._fill_perc(_lvl) for _lvl in _sub_line]
             for _sub_line in self._continuous_levels]
 
     def get_per_hour_timeline(self) -> list:
@@ -544,16 +576,14 @@ class CesspitHistory:
             self._init_ph()
         return self._deltas_ph
 
-    def get_per_hour_deltas_perc(self, tank_full_mm: int, tank_empty_mm: int) -> list:
+    def get_per_hour_deltas_perc(self) -> list:
         """
         Similar to get_per_hour_deltas, but the decrease levels are translated into percentages of the whole tank
-        :param tank_full_mm: the level, which is assumed to reported for full tank
-        :param tank_empty_mm: the level, which is assumed to reported for empty tank
         :return: list of floats (percentages) of the same size as get_per_hour_timeline returns
         """
         if len(self._deltas_ph) == 0:
             self._init_ph()
-        return [100 * _d / (tank_empty_mm - tank_full_mm) for _d in self._deltas_ph]
+        return [100 * _d / (self._tank_empty_mm - self._tank_full_mm) for _d in self._deltas_ph]
 
     def get_per_day_timeline(self) -> list:
         """
@@ -573,16 +603,14 @@ class CesspitHistory:
             self._init_pd()
         return self._deltas_pd
 
-    def get_per_day_deltas_perc(self, tank_full: int, tank_empty: int) -> list:
+    def get_per_day_deltas_perc(self) -> list:
         """
         Prepares (if needed) and returns the daily decrease in percentages of full tank of the available space left
-        :param tank_full: the level, which is assumed to reported for full tank
-        :param tank_empty: the level, which is assumed to reported for empty tank
-        :return:
+        :return: list[float]
         """
         if len(self._deltas_pd) == 0:
             self._init_pd()
-        return [100*_d/(tank_empty - tank_full) for _d in self._deltas_pd]
+        return [100*_d/(self._tank_empty_mm - self._tank_full_mm) for _d in self._deltas_pd]
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -647,6 +675,7 @@ def analysis_data_source(credentials_file: str = None, config_file: str = None) 
 if __name__ == "__main__":
     db = analysis_data_source()
     t = db.cesspit_increase(the_date=datetime.now(), hours_in_past=7*24+15)
+    t = db.cesspit_increase(the_date=datetime.now(), days_in_past=28)
     print(t.get_per_day_timeline())
     print(t.get_per_day_deltas())
     print(t.get_per_hour_timeline())

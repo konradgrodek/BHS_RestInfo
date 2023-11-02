@@ -2,10 +2,13 @@
 The file collects routines used to prepare matplotlib graphs
 """
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 from matplotlib.dates import DateFormatter, HourLocator
 from matplotlib import ticker
 from matplotlib import cm
 from matplotlib import colors
+
+from math import ceil
 import io
 
 from analysis.data import *
@@ -14,6 +17,7 @@ from core.bean import TemperatureGraphRESTInterface
 
 class Graph:
     def __init__(self, size=None):
+        mpl.rcParams["figure.dpi"] = 200
         self.figure, self.axes = plt.subplots(figsize=size, clear=True)
 
     def __del__(self):
@@ -137,23 +141,71 @@ class ProgressBar(Graph):
             self.axes.set_axis_off()
 
 
-class Last24hCesspitGraph(DataGraph):
+class BaseCesspitGraph(DataGraph):
+    LABEL_FILL_PERC = f'Wypełnienie [%]'
+    LABEL_DELTA = f'\u0394 [%]'
 
-    def __init__(self, data_source: AnalysisDataSource, tank_full_mm: int, tank_empty_mm: int):
+    def __init__(self, data_source: AnalysisDataSource):
         """
-        Constructs the object responsible for plotting the graph of Cesspit usage during last 24h
+        Constructs the object responsible for plotting the graph of Cesspit usage
         :param data_source: the AnalysisDataSource, which will be used to query the data
-        :param tank_full_mm: the configuration parameter: level of tank being full
-        :param tank_empty_mm: the configuration parameter: level of tank being empty
         """
         DataGraph.__init__(self, data_source)
-        self.data = data_source.cesspit_increase(
-            the_date=datetime.now(), hours_in_past=24)
-        self.tank_full_mm = tank_full_mm
-        self.tank_empty_mm = tank_empty_mm
         self.bar_color_map = cm.get_cmap(name='RdYlGn_r')
+        self.continuous_line_color_map = cm.get_cmap(name='OrRd_r')
         self.estimated_max_hourly_gain_perc = 2.0
         self.estimated_avg_hourly_gain_perc = 0.1
+
+    @staticmethod
+    def smart_fill_range(fill_perc_continuous: list) -> tuple:
+        return (
+            10*(min([min(_fp) for _fp in fill_perc_continuous]) // 10),
+            10*(ceil(max([max(_fp) for _fp in fill_perc_continuous]) / 10))
+        )
+
+    @staticmethod
+    def smart_delta_range(deltas_per_hour, est_max) -> tuple:
+        return (
+            0,
+            max(est_max, ceil(max(deltas_per_hour)))
+        )
+
+    def continous_plot_colors(self, count: int) -> list:
+        return [self.continuous_line_color_map(_c_id / (count + 1)) for _c_id in range(1, count + 1)]
+
+    def hourly_bar_color(self, _delta: float):
+        """
+        Having provided delta value, a color of the bar showing increase is returned
+        :param _delta:
+        :return:
+        """
+        return self.bar_color_map(
+            (_delta - self.estimated_avg_hourly_gain_perc) /
+            (self.estimated_max_hourly_gain_perc - self.estimated_avg_hourly_gain_perc)
+        )
+
+
+class PerHourCesspitGraph(BaseCesspitGraph):
+
+    def __init__(self, data_source: AnalysisDataSource, the_date: datetime, hours_in_the_past: int, extend_to_nearest_midnight: bool, tank_full_mm: int, tank_empty_mm: int):
+        """
+        Initializes the base class for all graphs that shows cesspit observations gathered per hour.
+        :param data_source: the object that will be used to query for data
+        :param the_date: the ending date of the observed period
+        :param hours_in_the_past: number of hours in the past
+        :param extend_to_nearest_midnight: if True, the x-axis will be extended till end of the day
+        :param tank_full_mm: configuration entry: the level of tank being full
+        :param tank_empty_mm: configuration entry: the level of tank being empty
+        """
+        BaseCesspitGraph.__init__(self, data_source)
+        _now = datetime.now()
+        self.extend_to_nearest_midnight = extend_to_nearest_midnight
+        self.data = data_source.cesspit_increase(
+            the_date=the_date,
+            hours_in_past=hours_in_the_past,
+            tank_full_mm=tank_full_mm,
+            tank_empty_mm=tank_empty_mm
+        )
 
     def prepare_plot(self):
         """
@@ -173,42 +225,87 @@ class Last24hCesspitGraph(DataGraph):
 
         # vertical bars for per-hour increase
         _timeline_per_hour = self.data.get_per_hour_timeline()
-        _deltas_per_hour = self.data.get_per_hour_deltas_perc(
-            tank_full_mm=self.tank_full_mm, tank_empty_mm=self.tank_empty_mm)
+        _deltas_per_hour = self.data.get_per_hour_deltas_perc()
         _bars = _axis_daily.bar(_timeline_per_hour, _deltas_per_hour, width=0.02,
-                                color=[self._bar_color(_d) for _d in _deltas_per_hour])
+                                color=[self.hourly_bar_color(_d) for _d in _deltas_per_hour])
         _axis_daily.bar_label(_bars, ['' if _d < 0.1 else f'+{_d:.1f}%' for _d in _deltas_per_hour], rotation=90)
 
         # continuous line for the actual state
         _timeline_continuous = self.data.get_continuous_timeline()
-        _fill_perc_continuous = self.data.get_continuous_fill_perc(
-            tank_full_mm=self.tank_full_mm, tank_empty_mm=self.tank_empty_mm)
+        _fill_perc_continuous = self.data.get_continuous_fill_perc()
 
-        for _tm, _lv in zip(_timeline_continuous, _fill_perc_continuous):
-            _axis_continuous.plot(_tm, _lv, color='red', linewidth=2)
+        for _tm, _lv, _col in zip(
+                _timeline_continuous,
+                _fill_perc_continuous,
+                self.continous_plot_colors(len(_timeline_continuous))
+        ):
+            _axis_continuous.plot(_tm, _lv, color=_col, linewidth=1.5)
 
-        _axis_continuous.set_ylim(0, 100)
-        _axis_continuous.set_ylabel(f'Wypełnienie [%]')
-        _axis_daily.set_ylim(0, max(self.estimated_max_hourly_gain_perc, max(_deltas_per_hour)))
-        _axis_daily.set_ylabel(f'\u0394 [%]')
-
-    def _bar_color(self, _delta: float):
-        """
-        Having provided delta value, a color of the bar showing increase is returned
-        :param _delta:
-        :return:
-        """
-        return self.bar_color_map(
-            (_delta - self.estimated_avg_hourly_gain_perc) /
-            (self.estimated_max_hourly_gain_perc - self.estimated_avg_hourly_gain_perc)
-        )
+        _axis_continuous.set_ylim(*BaseCesspitGraph.smart_fill_range(_fill_perc_continuous))
+        _axis_continuous.set_ylabel(BaseCesspitGraph.LABEL_FILL_PERC)
+        _axis_daily.set_ylim(*BaseCesspitGraph.smart_delta_range(_deltas_per_hour, self.estimated_max_hourly_gain_perc))
+        _axis_daily.set_ylabel(BaseCesspitGraph.LABEL_DELTA)
+        if self.extend_to_nearest_midnight:
+            self.axes.set_xlim(
+                min(_timeline_continuous[0]),
+                max(_timeline_continuous[-1]).replace(hour=23, minute=59, second=59)
+            )
+        else:
+            self.axes.set_xlim(
+                min(_timeline_continuous[0]),
+                max(_timeline_continuous[-1])
+            )
 
     def has_valid_data(self):
-        return self.tank_full_mm is not None and self.tank_empty_mm is not None
+        return self.data.is_valid()
+
+
+class Last24hCesspitGraph(PerHourCesspitGraph):
+
+    def __init__(self, data_source: AnalysisDataSource, tank_full_mm: int, tank_empty_mm: int):
+        """
+        Constructs the object responsible for plotting the graph of Cesspit usage during last 24h
+        :param data_source: the AnalysisDataSource, which will be used to query the data
+        :param tank_full_mm: the configuration parameter: level of tank being full
+        :param tank_empty_mm: the configuration parameter: level of tank being empty
+        """
+        PerHourCesspitGraph.__init__(
+            self, data_source=data_source,
+            the_date=datetime.now(),
+            hours_in_the_past=24,
+            extend_to_nearest_midnight=False,
+            tank_full_mm=tank_full_mm, tank_empty_mm=tank_empty_mm
+        )
+
+
+class DailyCesspitGraph(PerHourCesspitGraph):
+
+    def __init__(self, data_source: AnalysisDataSource, the_date: datetime, tank_full_mm: int, tank_empty_mm: int):
+        """
+        Constructs the object responsible for plotting the graph of Cesspit usage during given day
+        :param data_source: the AnalysisDataSource, which will be used to query the data
+        :param the_date
+        :param tank_full_mm: the configuration parameter: level of tank being full
+        :param tank_empty_mm: the configuration parameter: level of tank being empty
+        """
+        _now = datetime.now()
+        _for_today = the_date.year == _now.year \
+                     and the_date.month == _now.month \
+                     and the_date.day == _now.day
+        PerHourCesspitGraph.__init__(
+            self, data_source=data_source,
+            the_date=the_date.replace(hour=23, minute=59, second=59),
+            hours_in_the_past=24,
+            extend_to_nearest_midnight=_for_today,
+            tank_full_mm=tank_full_mm, tank_empty_mm=tank_empty_mm
+        )
 
 
 if __name__ == '__main__':
     # svg = DailyTemperatureGraph(data_source=analysis_data_source(), sensor_loc='External', title='Temperatura zewnętrzna').plot_to_svg()
-    svg = ProgressBar(progress=20).plot_to_svg()
+    # svg = ProgressBar(progress=20).plot_to_svg()
+    # svg = Last24hCesspitGraph(data_source=analysis_data_source(), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
+    # svg = DailyCesspitGraph(data_source=analysis_data_source(), the_date=datetime(2023, 10, 22), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
+    svg = DailyCesspitGraph(data_source=analysis_data_source(), the_date=datetime.now(), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
 
     print(svg)

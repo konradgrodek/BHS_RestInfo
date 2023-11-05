@@ -29,7 +29,7 @@ class AnalysisDataSource:
             hours_in_the_past=hours_in_past
         )
 
-    def cesspit_increase(self, the_date: datetime, tank_full_mm: int, tank_empty_mm: int, hours_in_past: int = 0, days_in_past: int = 0):
+    def cesspit_increase(self, the_date: datetime, tank_full_mm: int, tank_empty_mm: int, hours_in_past: int = 0, days_in_past: int = 0, add_adherent_records: bool = False):
         """
         Returns collection of cesspit level observations within
         period given by end-date and number of preceeding days / hours
@@ -38,6 +38,7 @@ class AnalysisDataSource:
         :param tank_empty_mm: the level, which is assumed to reported for empty tank
         :param hours_in_past: number of hours in past to be considered when calculating start date of observation window
         :param days_in_past: number of days in past to be considered when calculating start date of observation window
+        :param add_adherent_records if True, the adherent records in past and future will be added to the result set
         :return: CesspitHistory object initialized with records from given observation window
         """
         if hours_in_past is None:
@@ -56,12 +57,20 @@ class AnalysisDataSource:
                 hours_count=_hours_count,
                 full_day_included=days_in_past > 0
             )
+
+        adherent_rec_next = None
+        adherent_rec_prev = None
+        if add_adherent_records:
+            _boundry_up = the_date if len(_records) == 0 else _records[-1].timestamp
+            _boundry_down = (the_date - timedelta(hours=_hours_count)).replace(minute=0, second=0, microsecond=0) \
+                if len(_records) == 0 else _records[0].timestamp
+            adherent_rec_next = self.persistence.cesspit_adherent_observation(_boundry_up, is_next=True)
+            adherent_rec_prev = self.persistence.cesspit_adherent_observation(_boundry_down, is_next=False)
+
         return CesspitHistory(
             records=_records,
-            adherent_previous_record=None if len(_records) == 0
-            else self.persistence.cesspit_adherent_observation(_records[0].timestamp, is_next=False),
-            adherent_next_record=None if len(_records) == 0
-            else self.persistence.cesspit_adherent_observation(_records[-1].timestamp, is_next=True),
+            adherent_previous_record=adherent_rec_prev,
+            adherent_next_record=adherent_rec_next,
             tank_full_mm=tank_full_mm,
             tank_empty_mm=tank_empty_mm
         )
@@ -421,11 +430,13 @@ class CesspitHistory:
         _levels = [_r.level if _r.level > self._tank_full_mm else self._tank_full_mm for _r in records]
         if adherent_previous_record is not None:
             self._records = [adherent_previous_record] + self._records
-            _timeline = [records[0].timestamp.replace(hour=0, minute=0, second=0)] + _timeline
+            _timeline = [adherent_previous_record.timestamp if len(records) < 1
+                         else records[0].timestamp.replace(hour=0, minute=0, second=0)] + _timeline
             _levels = [adherent_previous_record.level] + _levels
         if adherent_next_record is not None:
             self._records.append(adherent_next_record)
-            _timeline.append(records[-1].timestamp.replace(hour=23, minute=59, second=59))
+            _timeline.append(adherent_next_record.timestamp if len(records) < 1
+                             else records[-1].timestamp.replace(hour=23, minute=59, second=59))
             _levels.append(adherent_next_record.level)
 
         # delta is "reversed" because levels are lowering (this is the "space left", not "space occupied")

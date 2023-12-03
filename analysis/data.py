@@ -3,6 +3,7 @@ This encapsulates all classes / methods used to prepare data stored in the datab
 """
 from scipy import stats
 from functools import reduce
+import holidays
 
 from persistence.analysis import *
 from core.util import SunsetCalculator
@@ -29,7 +30,8 @@ class AnalysisDataSource:
             hours_in_the_past=hours_in_past
         )
 
-    def cesspit_increase(self, the_date: datetime, tank_full_mm: int, tank_empty_mm: int, hours_in_past: int = 0, days_in_past: int = 0, add_adherent_records: bool = False):
+    def cesspit_increase(self, the_date: datetime, tank_full_mm: int, tank_empty_mm: int, hours_in_past: int = 0,
+                         days_in_past: int = 0, add_adherent_records: bool = False):
         """
         Returns collection of cesspit level observations within
         period given by end-date and number of preceeding days / hours
@@ -52,7 +54,7 @@ class AnalysisDataSource:
             raise ValueError(f'The end-date is required to be provided when fetching cesspit observations')
 
         _hours_count = hours_in_past + 24 * days_in_past
-        _records = self.persistence.cesspit_observations(
+        _records = self.persistence.cesspit_observations_during_hours_in_past(
                 the_date,
                 hours_count=_hours_count,
                 full_day_included=days_in_past > 0
@@ -71,6 +73,49 @@ class AnalysisDataSource:
             records=_records,
             adherent_previous_record=adherent_rec_prev,
             adherent_next_record=adherent_rec_next,
+            tank_full_mm=tank_full_mm,
+            tank_empty_mm=tank_empty_mm
+        )
+
+    def cesspit_prediction(self, tank_full_mm: int, tank_empty_mm: int, prediction_on_days: int = 8*7,
+                           the_date: datetime = datetime.now(), starting_level: int = -1):
+        past_records = self.persistence.cesspit_observations_during_hours_in_past(
+            the_date,
+            hours_count=prediction_on_days * 24
+        )
+        if starting_level < 0:
+            starting_level = past_records[-1].level
+
+        return CesspitPrediction(
+            past_records=past_records,
+            starting_level=starting_level,
+            tank_full_mm=tank_full_mm,
+            tank_empty_mm=tank_empty_mm,
+            starting_date=the_date
+        )
+
+    def _last_removal_date(self, the_date: datetime = datetime.now()) -> datetime:
+        _typical_period_length_days = 14
+        past_records = self.persistence.cesspit_observations_during_hours_in_past(
+            the_date,
+            hours_count=_typical_period_length_days*24,
+            full_day_included=True
+        )
+        if len(past_records) == 0:
+            return the_date
+
+        for _p, _n in zip(past_records[:-1], past_records[1:]):
+            if (_n.level - _p.level) > 0:
+                return _n.timestamp
+
+        return self._last_removal_date(the_date=past_records[0].timestamp)
+
+    def cesspit_increase_since_last_removal_date(self, tank_full_mm: int, tank_empty_mm: int,
+                                                 the_date: datetime = datetime.now()):
+        _records = self.persistence.cesspit_observations(self._last_removal_date(the_date), the_date)
+
+        return CesspitHistory(
+            records=_records,
             tank_full_mm=tank_full_mm,
             tank_empty_mm=tank_empty_mm
         )
@@ -407,7 +452,8 @@ class CesspitHistory:
     The class is responsible to translate the collection of cesspit levels readings into data ready to show on charts
     """
 
-    def __init__(self, records: list, adherent_previous_record: TankLevel, adherent_next_record: TankLevel, tank_full_mm: int, tank_empty_mm: int):
+    def __init__(self, records: list, tank_full_mm: int, tank_empty_mm: int,
+                 adherent_previous_record: TankLevel = None, adherent_next_record: TankLevel = None):
         """
         Initializes the object and some of the pre-calculated data:
         - detects the tank removals and splits the timeline into different periods
@@ -472,7 +518,7 @@ class CesspitHistory:
             and self._tank_full_mm < self._tank_empty_mm
 
     @staticmethod
-    def _cluster(clusters_top_values: list, objects_to_cluster: list, get_clustering_attr, get_value_attr):
+    def cluster(clusters_top_values: list, objects_to_cluster: list, get_clustering_attr, get_value_attr):
         """
         Divides the input list of objects into clusters accordingly to defined boundaries.
         Returns list of lists, where top list is of size top-values + 1;
@@ -507,11 +553,17 @@ class CesspitHistory:
         """
         For given measured level calculates what is actual fill percentage of the tank
         :param level_mm: the measured level (measurement is from the top!)
-        :param tank_full_mm: the level when the tank is full
-        :param tank_empty_mm: the level, in millimeters, when the tank is assumed to be empty
         :return: the fill percenage of the cesspit
         """
         return 100 * (self._tank_empty_mm - level_mm) / (self._tank_empty_mm - self._tank_full_mm)
+
+    def _delta_perc(self, delta_mm: int) -> float:
+        """
+        For given delta measured in mm, returns the percentage of the whole tank.
+        :param delta_mm: the increase (or decrease) of tank level
+        :return: the delta measured as percentage of the whole tank
+        """
+        return 100 * delta_mm / (self._tank_empty_mm - self._tank_full_mm)
 
     def _init_ph(self):
         """
@@ -523,7 +575,7 @@ class CesspitHistory:
         _stop = self._records[-1].timestamp
         _hours_count = int((_stop - _start).total_seconds() / (60 * 60)) + 1
         self._deltas_timeline_ph = [_start + timedelta(hours=h) for h in range(_hours_count)]
-        _deltas_clusterd_ph = CesspitHistory._cluster(
+        _deltas_clusterd_ph = CesspitHistory.cluster(
             self._deltas_timeline_ph[1:], list(zip(self._deltas_timeline, self._deltas)), lambda x: x[0], lambda x: x[1])
         self._deltas_ph = [0 if len(_cl) == 0 else sum(_cl) for _cl in _deltas_clusterd_ph]
 
@@ -537,7 +589,7 @@ class CesspitHistory:
         _stop = self._records[-1].timestamp
         _days_count = int((_stop - _start).total_seconds() / (24 * 60 * 60)) + 1
         self._deltas_timeline_pd = [_start + timedelta(days=d) for d in range(_days_count)]
-        _deltas_clustered_pd = CesspitHistory._cluster(
+        _deltas_clustered_pd = CesspitHistory.cluster(
             self._deltas_timeline_pd[1:], list(zip(self._deltas_timeline, self._deltas)), lambda x: x[0], lambda x: x[1])
         self._deltas_pd = [0 if len(_cl) == 0 else sum(_cl) for _cl in _deltas_clustered_pd]
 
@@ -594,7 +646,7 @@ class CesspitHistory:
         """
         if len(self._deltas_ph) == 0:
             self._init_ph()
-        return [100 * _d / (self._tank_empty_mm - self._tank_full_mm) for _d in self._deltas_ph]
+        return [self._delta_perc(_d) for _d in self._deltas_ph]
 
     def get_per_day_timeline(self) -> list:
         """
@@ -621,8 +673,263 @@ class CesspitHistory:
         """
         if len(self._deltas_pd) == 0:
             self._init_pd()
-        return [100*_d/(self._tank_empty_mm - self._tank_full_mm) for _d in self._deltas_pd]
+        return [self._delta_perc(_d) for _d in self._deltas_pd]
 
+
+class CesspitPrediction(CesspitHistory):
+    PERIOD_START_HOURS = (0, 6, 12, 18)
+    PL_FESTIVITY = holidays.country_holidays('PL')
+
+    @staticmethod
+    def _period_ranges(tm: datetime) -> tuple:
+        _period_start_tms = [
+            tm.replace(hour=_p, minute=0, second=0, microsecond=0) for _p in CesspitPrediction.PERIOD_START_HOURS
+        ] + [(tm+timedelta(days=1)).replace(
+            hour=CesspitPrediction.PERIOD_START_HOURS[0], minute=0, second=0, microsecond=0)]
+
+        for _start, _stop in zip(_period_start_tms[:-1], _period_start_tms[1:]):
+            if _start <= tm < _stop:
+                return _start, _stop
+
+    def __init__(self, past_records: list, starting_level: int, starting_date: datetime,
+                 tank_full_mm: int, tank_empty_mm: int):
+        CesspitHistory.__init__(
+            self, records=past_records,
+            tank_full_mm=tank_full_mm, tank_empty_mm=tank_empty_mm
+        )
+        self._starting_level_mm = starting_level
+        self._starting_date = starting_date
+        self._predictions_workday = {}
+        self._predictions_regular_saturday = {}
+        self._predictions_sunday_or_festivity = {}
+
+        # pp stands for per-period - this is "training" data
+        self._deltas_timeline_pp = []
+        self._deltas_pp = []
+
+        # pred stands for predicted (per-period)
+        self._deltas_timeline_pred = []
+        self._deltas_pred = []
+        self._levels_pred = []
+
+        # predicted, per-day
+        self._deltas_timeline_pred_pd = []
+        self._deltas_pred_pd = []
+
+    def _init_pp(self):
+        _start = CesspitPrediction._period_ranges(self._records[0].timestamp)[1]
+        _stop = CesspitPrediction._period_ranges(self._records[-1].timestamp)[0]
+
+        _full_days_cnt = (_stop.date() - _start.date()).days - 1
+        _first_day_periods = (_p for _p in CesspitPrediction.PERIOD_START_HOURS if _p > _start.hour)
+        _last_day_periods = (_p for _p in CesspitPrediction.PERIOD_START_HOURS if _p < _stop.hour)
+
+        self._deltas_timeline_pp = [_start] + \
+            [_start.replace(hour=_p) for _p in CesspitPrediction.PERIOD_START_HOURS if _p > _start.hour]
+
+        self._deltas_timeline_pp += [
+            (_start + timedelta(days=_days)).replace(hour=_hour)
+            for _days, _hour in zip(
+                reduce(
+                    lambda x, y: x+y,
+                    ((_d,)*len(CesspitPrediction.PERIOD_START_HOURS)
+                     for _d in range(1, _full_days_cnt+1))
+                ),
+                CesspitPrediction.PERIOD_START_HOURS * _full_days_cnt
+            )
+        ]
+
+        self._deltas_timeline_pp += \
+            [_stop.replace(hour=_p) for _p in CesspitPrediction.PERIOD_START_HOURS if _p < _stop.hour] + [_stop]
+
+        _deltas_clustered_pp = CesspitHistory.cluster(
+            self._deltas_timeline_pp,
+            list(zip(self._deltas_timeline, self._deltas)),
+            lambda x: x[0], lambda x: x[1]
+        )  # note that last period is removed to align sizes!
+
+        # align the timeline: remove last point
+        # (because the timeline is composed of beginnings of periods and last one is incomplete, we reject it)
+        self._deltas_timeline_pp = self._deltas_timeline_pp[:-1]
+        # when calculating deltas, also align it by removing first and last cluster
+        # (which are for the incomplete periods)
+        self._deltas_pp = [0 if len(_cl) == 0 else sum(_cl) for _cl in _deltas_clustered_pp[1:-1]]
+
+    def _get_predicictive_timeline(self) -> list:
+        if len(self._deltas_timeline_pp) == 0:
+            self._init_pp()
+        return self._deltas_timeline_pp
+
+    def _get_predictive_deltas(self) -> list:
+        if len(self._deltas_pp) == 0:
+            self._init_pp()
+        return self._deltas_pp
+
+    @staticmethod
+    def _is_in_period(tm: datetime, period_beginning: int):
+        return tm.hour == period_beginning
+
+    @staticmethod
+    def _filter_by_period(records, period_beginning: int):
+        return filter(lambda x: CesspitPrediction._is_in_period(x[0], period_beginning), records)
+
+    @staticmethod
+    def _is_festivity(tm: datetime) -> bool:
+        return tm in CesspitPrediction.PL_FESTIVITY
+
+    @staticmethod
+    def _is_sunday(tm: datetime) -> bool:
+        return tm.weekday() == 6
+
+    @staticmethod
+    def _filter_fest_or_sun(records: list):
+        return filter(
+            lambda x: CesspitPrediction._is_festivity(x[0]) or CesspitPrediction._is_sunday(x[0]),
+            records
+        )
+
+    @staticmethod
+    def _is_workday(tm: datetime) -> bool:
+        return 0 <= tm.weekday() < 5 and not CesspitPrediction._is_festivity(tm)
+
+    @staticmethod
+    def _filter_workdays(records: list):
+        return filter(lambda x: CesspitPrediction._is_workday(x[0]), records)
+
+    @staticmethod
+    def _is_regular_saturday(tm: datetime) -> bool:
+        return tm.weekday() == 5 and not CesspitPrediction._is_festivity(tm)
+
+    @staticmethod
+    def _filter_regular_saturdays(records: list):
+        return filter(lambda x: CesspitPrediction._is_regular_saturday(x[0]), records)
+
+    @staticmethod
+    def _predict(deltas: list) -> int:
+        return int(stats.tmean(deltas))
+
+    def _get_predicted_delta(self, tm: datetime):
+        _period = CesspitPrediction._period_ranges(tm)[0].hour
+        if self._is_workday(tm):
+            return self._get_workday_prediction(_period)
+        if self._is_festivity(tm):
+            return self._get_festivity_prediction(_period)
+        return self._get_saturday_prediction(_period)
+
+    def _get_workday_prediction(self, period_beginning: int) -> int:
+        prediction = self._predictions_workday.get(period_beginning)
+        if prediction is None:
+            self._predictions_workday[period_beginning] = self._predict([
+                x[1] for x in
+                self._filter_by_period(
+                    self._filter_workdays(
+                        list(zip(
+                            self._get_predicictive_timeline(),
+                            self._get_predictive_deltas()
+                        ))
+                    ),
+                    period_beginning
+                )
+            ])
+            return self._get_workday_prediction(period_beginning)
+        return prediction
+
+    def _get_saturday_prediction(self, period_beginning: int) -> int:
+        prediction = self._predictions_regular_saturday.get(period_beginning)
+        if prediction is None:
+            self._predictions_regular_saturday[period_beginning] = self._predict([
+                x[1] for x in
+                self._filter_by_period(
+                    self._filter_regular_saturdays(
+                        list(zip(
+                            self._get_predicictive_timeline(),
+                            self._get_predictive_deltas()
+                        ))
+                    ),
+                    period_beginning
+                )
+            ])
+            return self._get_saturday_prediction(period_beginning)
+        return prediction
+
+    def _get_festivity_prediction(self, period_beginning: int) -> int:
+        prediction = self._predictions_sunday_or_festivity.get(period_beginning)
+        if prediction is None:
+            self._predictions_sunday_or_festivity[period_beginning] = self._predict([
+                x[1] for x in
+                self._filter_by_period(
+                    self._filter_fest_or_sun(
+                        list(zip(
+                            self._get_predicictive_timeline(),
+                            self._get_predictive_deltas()
+                        ))
+                    ),
+                    period_beginning
+                )
+            ])
+            return self._get_festivity_prediction(period_beginning)
+        return prediction
+
+    def _init_pred(self):
+        _curr_period_start, _curr_period_end = CesspitPrediction._period_ranges(self._starting_date)
+        _first_delta = round(
+            self._get_predicted_delta(self._starting_date) * (
+                (self._starting_date - _curr_period_start).total_seconds() /
+                (_curr_period_end - _curr_period_start).total_seconds()
+            )
+        )
+        _period_end = _curr_period_end
+        self._deltas_timeline_pred = [_period_end]
+        self._deltas_pred = [_first_delta]
+        _level = self._starting_level_mm - _first_delta
+        self._levels_pred = [_level]
+        while _level > self._tank_full_mm:
+            _period_start, _period_end = CesspitPrediction._period_ranges(_period_end)
+            _delta = self._get_predicted_delta(_period_start)
+            _level -= _delta
+            if _level > self._tank_full_mm:
+                self._deltas_timeline_pred.append(_period_end)
+                self._deltas_pred.append(_delta)
+                self._levels_pred.append(_level)
+            else:
+                _tm = (
+                        _period_start + timedelta(
+                            seconds=(_period_end - _period_start).total_seconds() *
+                                    ((_level + _delta - self._tank_full_mm) / _delta)
+                        )
+                ).replace(second=0, microsecond=0)
+                self._deltas_timeline_pred.append(_tm)
+                self._deltas_pred.append((_level + _delta) - self._tank_full_mm)
+                self._levels_pred.append(self._tank_full_mm)
+
+        # calculate deltas per-day
+        _start = self._deltas_timeline_pred[0].replace(hour=0, minute=0, second=0, microsecond=0)
+        _stop = self._deltas_timeline_pred[-1]
+        _days_count = (_stop - _start).days + 1
+        self._deltas_timeline_pred_pd = [_start + timedelta(days=d) for d in range(_days_count)]
+        _deltas_clustered_pd = CesspitHistory.cluster(
+            self._deltas_timeline_pred_pd[1:], list(zip(self._deltas_timeline_pred, self._deltas_pred)), lambda x: x[0], lambda x: x[1])
+        self._deltas_pred_pd = [0 if len(_cl) == 0 else sum(_cl) for _cl in _deltas_clustered_pd]
+
+    def get_predicted_per_day_timeline(self) -> list:
+        if len(self._deltas_timeline_pred_pd) == 0:
+            self._init_pred()
+        return self._deltas_timeline_pred_pd
+
+    def get_predicted_per_day_deltas_perc(self) -> list:
+        if len(self._deltas_pred_pd) == 0:
+            self._init_pred()
+        return [self._delta_perc(_d) for _d in self._deltas_pred_pd]
+
+    def get_predicted_timeline(self) -> list:
+        if len(self._deltas_timeline_pred) == 0:
+            self._init_pred()
+        return self._deltas_timeline_pred
+
+    def get_predicted_fill_perc(self) -> list:
+        if len(self._levels_pred) == 0:
+            self._init_pred()
+        return [self._fill_perc(_l) for _l in self._levels_pred]
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -685,10 +992,17 @@ def analysis_data_source(credentials_file: str = None, config_file: str = None) 
 
 if __name__ == "__main__":
     db = analysis_data_source()
-    t = db.cesspit_increase(the_date=datetime.now(), hours_in_past=7*24+15)
-    t = db.cesspit_increase(the_date=datetime.now(), days_in_past=28)
-    print(t.get_per_day_timeline())
-    print(t.get_per_day_deltas())
-    print(t.get_per_hour_timeline())
-    print(t.get_per_hour_deltas())
 
+    p = db.cesspit_prediction(tank_full_mm=500, tank_empty_mm=1952, the_date=datetime.now() - timedelta(days=3))
+    print('WORKDAY')
+    for period_start in CesspitPrediction.PERIOD_START_HOURS:
+        print(f"{period_start:02d}: {p._get_workday_prediction(period_start)}")
+    print('SATURDAY')
+    for period_start in CesspitPrediction.PERIOD_START_HOURS:
+        print(f"{period_start:02d}: {p._get_saturday_prediction(period_start)}")
+    print('FESTIVITY')
+    for period_start in CesspitPrediction.PERIOD_START_HOURS:
+        print(f"{period_start:02d}: {p._get_festivity_prediction(period_start)}")
+    print(p.get_predicted_deltas())
+    print(p.get_predicted_levels())
+    print(p.get_predicted_timeline())

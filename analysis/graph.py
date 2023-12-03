@@ -249,8 +249,11 @@ class PerHourCesspitGraph(BaseCesspitGraph):
         # vertical bars for per-hour increase
         _timeline_per_hour = self.data.get_per_hour_timeline()
         _deltas_per_hour = self.data.get_per_hour_deltas_perc()
-        _bars = _axis_daily.bar(_timeline_per_hour, _deltas_per_hour, width=timedelta(minutes=40),
-                                color=[self.hourly_bar_color(_d) for _d in _deltas_per_hour])
+        _bars = _axis_daily.bar(
+            _timeline_per_hour, _deltas_per_hour,
+            width=timedelta(minutes=40),
+            color=[self.hourly_bar_color(_d) for _d in _deltas_per_hour]
+        )
         _axis_daily.bar_label(_bars, ['' if _d < 0.1 else f'+{_d:.1f}%' for _d in _deltas_per_hour], rotation=90)
 
         # continuous line for the actual state
@@ -346,7 +349,6 @@ class PerDayCesspitGraph(BaseCesspitGraph):
         :param tank_empty_mm: configuration entry: the level of tank being empty
         """
         BaseCesspitGraph.__init__(self, data_source)
-        _now = datetime.now()
         self.data = data_source.cesspit_increase(
             the_date=the_date,
             days_in_past=days_in_the_past,
@@ -364,11 +366,9 @@ class PerDayCesspitGraph(BaseCesspitGraph):
         _axis_continuous = self.axes
         _axis_continuous.xaxis.set_tick_params(labelrotation=90)
         _axis_continuous.xaxis.set_major_formatter(DateFormatter('%b %d'))
-        # _axis_continuous.xaxis.set_minor_locator(DateLocator())
         _axis_daily = self.axes.twinx()
         _axis_daily.xaxis.set_tick_params(labelrotation=90)
         _axis_daily.xaxis.set_major_formatter(DateFormatter('%b %d'))
-        # _axis_daily.xaxis.set_minor_locator(DateLocator())
 
         # vertical bars for per-hour increase
         _timeline_per_day = self.data.get_per_day_timeline()
@@ -401,14 +401,113 @@ class PerDayCesspitGraph(BaseCesspitGraph):
             self.axes.axhline(100, color='red', dashes=(5, 2), linewidth=0.5)
 
 
+class PredictionCesspitGraph(BaseCesspitGraph):
+
+    def __init__(self, data_source: AnalysisDataSource, tank_full_mm: int, tank_empty_mm: int):
+        BaseCesspitGraph.__init__(self, data_source)
+        self.past_data = data_source.cesspit_increase_since_last_removal_date(
+            tank_full_mm=tank_full_mm, tank_empty_mm=tank_empty_mm
+        )
+        self.prediction_data = data_source.cesspit_prediction(
+            tank_full_mm=tank_full_mm, tank_empty_mm=tank_empty_mm
+        )
+
+    def daily_predicted_bar_color(self, _delta: float):
+        """
+        A copy of similar method in base class that provides color of bar with the daily predicted increase
+        :param _delta: percentage of increase
+        :return:
+        """
+        _pastel_factor = 0.6
+        return [(1.-_pastel_factor)*_pc + _pastel_factor for _pc in self.daily_bar_color(_delta)]
+
+    def prepare_plot(self):
+        """
+        This chart consists of:
+        - per-day bars and continuous line since last removal
+        - per-day bart and per-period line of predicted values
+        :return: None, just prepares the plot
+        """
+        # define some constant attributes for the chart
+        _past_data_continuous_line_color = "red"
+        _predicted_data_continuous_line_color = "gray"
+        _bars_width = timedelta(hours=6)
+
+        # gather data
+        _timeline_per_day = self.past_data.get_per_day_timeline()
+        _deltas_per_day = self.past_data.get_per_day_deltas_perc()
+        _timeline_predicted_per_day = self.prediction_data.get_predicted_per_day_timeline()
+        _deltas_predicted_per_day = self.prediction_data.get_predicted_per_day_deltas_perc()
+
+        _overlapping_day = None if _timeline_per_day[-1] != _timeline_predicted_per_day[0] \
+            else _timeline_per_day[-1]
+        _overlapping_deltas = None if _timeline_per_day[-1] != _timeline_predicted_per_day[0] \
+            else (_deltas_per_day[-1], _deltas_predicted_per_day[0])
+        if _overlapping_day is not None:
+            _timeline_per_day = _timeline_per_day[:-1]
+            _timeline_predicted_per_day = _timeline_predicted_per_day[1:]
+            _deltas_per_day = _deltas_per_day[:-1]
+            _deltas_predicted_per_day = _deltas_predicted_per_day[1:]
+
+        _timeline_continuous = self.past_data.get_continuous_timeline()[0]
+        _fill_perc_continuous = self.past_data.get_continuous_fill_perc()[0]
+        _timeline_predicted_continuous = self.prediction_data.get_predicted_timeline()
+        _fill_perc_predicted_continuous = self.prediction_data.get_predicted_fill_perc()
+
+        # start producing chart by setting up axes
+        _axis_continuous = self.axes
+        _axis_continuous.xaxis.set_tick_params(labelrotation=90)
+        _axis_continuous.xaxis.set_major_formatter(DateFormatter('%b %d'))
+        _axis_daily = self.axes.twinx()
+        _axis_daily.xaxis.set_tick_params(labelrotation=90)
+        _axis_daily.xaxis.set_major_formatter(DateFormatter('%b %d'))
+        # per-day bars since last removal
+        _bars = _axis_daily.bar(_timeline_per_day, _deltas_per_day, width=_bars_width,
+                                color=[self.daily_bar_color(_d) for _d in _deltas_per_day])
+        _axis_daily.bar_label(_bars, ['' if _d < 0.1 else f'+{_d:.1f}%' for _d in _deltas_per_day], rotation=90)
+        # continuous line since last removal
+
+        _axis_continuous.plot(_timeline_continuous, _fill_perc_continuous, color=_past_data_continuous_line_color,
+                              linewidth=1.5)
+
+        # overlapping day
+        if _overlapping_day is not None:
+            _axis_daily.bar(_overlapping_day, _overlapping_deltas[0], width=_bars_width,
+                            color=self.daily_bar_color(sum(_overlapping_deltas)))
+            _bar = _axis_daily.bar(_overlapping_day, _overlapping_deltas[1], bottom=_overlapping_deltas[0],
+                                   width=_bars_width, color=self.daily_predicted_bar_color(sum(_overlapping_deltas)),
+                                   edgecolor="gray", hatch="/")
+            _axis_daily.bar_label(_bar, [f'+{_overlapping_deltas[0]:.1f}% + {_overlapping_deltas[1]:.1f}%'],
+                                  rotation=90, color="gray")
+
+        # predicted days
+        _bars = _axis_daily.bar(_timeline_predicted_per_day, _deltas_predicted_per_day, width=_bars_width,
+                                color=[self.daily_predicted_bar_color(_d) for _d in _deltas_predicted_per_day],
+                                edgecolor="gray", hatch="/")
+        _axis_daily.bar_label(_bars, ['' if _d < 0.1 else f'+{_d:.1f}%' for _d in _deltas_predicted_per_day],
+                              rotation=90, color="gray")
+
+        _axis_continuous.plot(_timeline_predicted_continuous, _fill_perc_predicted_continuous,
+                              color=_predicted_data_continuous_line_color, linewidth=1, dashes=(3, 3))
+
+        _axis_continuous.set_ylim(0, 110)
+        _axis_continuous.set_ylabel(BaseCesspitGraph.LABEL_FILL_PERC)
+        _axis_daily.set_ylim(*BaseCesspitGraph.smart_delta_range(
+            _deltas_per_day+_deltas_predicted_per_day, self.estimated_max_daily_gain_perc))
+        _axis_daily.set_ylabel(BaseCesspitGraph.LABEL_DELTA)
+
+        self.axes.axhline(100, color='red', dashes=(5, 2), linewidth=0.5)
+
+
 if __name__ == '__main__':
     data_source = analysis_data_source()
     # svg = DailyTemperatureGraph(data_source=analysis_data_source(), sensor_loc='External', title='Temperatura zewnętrzna').plot_to_svg()
     # svg = ProgressBar(progress=20).plot_to_svg()
     # svg = Last24hCesspitGraph(data_source=data_source, tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
-    svg = DailyCesspitGraph(data_source=data_source, the_date=datetime.now(), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
+    # svg = DailyCesspitGraph(data_source=data_source, the_date=datetime.now(), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
     # svg = DailyCesspitGraph(data_source=data_source, the_date=datetime(2023, 10, 21), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
     # svg = DailyCesspitGraph(data_source=data_source, the_date=datetime(2023, 10, 27), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
     # svg = PerDayCesspitGraph(data_source=data_source, the_date=datetime(2023, 11, 3), days_in_the_past=28, tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
+    svg = PredictionCesspitGraph(data_source=data_source, tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
 
     print(svg)

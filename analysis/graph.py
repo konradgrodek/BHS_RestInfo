@@ -423,6 +423,8 @@ class PerDayCesspitGraph(BaseCesspitGraph):
 
 
 class PredictionCesspitGraph(BaseCesspitGraph):
+    _CACHED_DATA_DATE = None
+    _CACHED_SVG = None
 
     def __init__(self, data_source: AnalysisDataSource, tank_full_mm: int, tank_empty_mm: int):
         BaseCesspitGraph.__init__(self, data_source)
@@ -441,6 +443,14 @@ class PredictionCesspitGraph(BaseCesspitGraph):
         """
         _pastel_factor = 0.6
         return [(1.-_pastel_factor)*_pc + _pastel_factor for _pc in self.daily_bar_color(_delta)]
+
+    def plot_to_svg(self) -> bytes:
+        if PredictionCesspitGraph._CACHED_DATA_DATE is not None \
+                and PredictionCesspitGraph._CACHED_DATA_DATE == self.prediction_data.as_of_date:
+            return PredictionCesspitGraph._CACHED_SVG
+        PredictionCesspitGraph._CACHED_DATA_DATE = self.prediction_data.as_of_date
+        PredictionCesspitGraph._CACHED_SVG = super(PredictionCesspitGraph, self).plot_to_svg()
+        return PredictionCesspitGraph._CACHED_SVG
 
     def prepare_plot(self):
         """

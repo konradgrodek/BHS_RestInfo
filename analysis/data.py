@@ -13,6 +13,7 @@ class AnalysisDataSource:
 
     def __init__(self, db: str, host: str, user: str, password: str):
         self.persistence = AnalysisPersistence(db=db, host=host, user=user, password=password)
+        self._cached_cesspit_prediction = None
 
     def temperature_daily_chronology(
             self, sensor_location: str, the_date: datetime = datetime.now()):
@@ -86,13 +87,17 @@ class AnalysisDataSource:
         if starting_level < 0:
             starting_level = past_records[-1].level
 
-        return CesspitPrediction(
+        if self._cached_cesspit_prediction and self._cached_cesspit_prediction.as_of_date == past_records[-1].timestamp:
+            return self._cached_cesspit_prediction
+
+        self._cached_cesspit_prediction = CesspitPrediction(
             past_records=past_records,
             starting_level=starting_level,
             tank_full_mm=tank_full_mm,
             tank_empty_mm=tank_empty_mm,
             starting_date=the_date
         )
+        return self._cached_cesspit_prediction
 
     def _last_removal_date(self, the_date: datetime = datetime.now()) -> datetime:
         _typical_period_length_days = 14
@@ -697,6 +702,7 @@ class CesspitPrediction(CesspitHistory):
             self, records=past_records,
             tank_full_mm=tank_full_mm, tank_empty_mm=tank_empty_mm
         )
+        self.as_of_date = past_records[-1].timestamp
         self._starting_level_mm = starting_level
         self._starting_date = starting_date
         self._predictions_workday = {}
@@ -930,6 +936,9 @@ class CesspitPrediction(CesspitHistory):
         if len(self._levels_pred) == 0:
             self._init_pred()
         return [self._fill_perc(_l) for _l in self._levels_pred]
+
+    def get_predicted_date(self) -> datetime:
+        return self.get_predicted_timeline()[-1]
 
 # ----------------------------------------------------------------------------------------------------------------------
 

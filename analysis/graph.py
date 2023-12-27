@@ -3,7 +3,7 @@ The file collects routines used to prepare matplotlib graphs
 """
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from matplotlib.dates import DateFormatter, HourLocator, DateLocator
+from matplotlib.dates import DateFormatter, HourLocator
 from matplotlib import ticker
 from matplotlib import cm
 from matplotlib import colors
@@ -104,12 +104,15 @@ class DailyTemperatureGraph(DataGraph):
 
         self.axes.set_title(self.title)
         self.axes.set_ylabel('\u2103')
+        self.axes.set_ylim((_min[1] // 10) * 10, (_max[1] // 10 + 1) * 10)
         self.axes.set_xlim(datetime(self.the_date.year, self.the_date.month, self.the_date.day, 0, 0, 0),
                            datetime(self.the_date.year, self.the_date.month, self.the_date.day, 0, 0, 0) + timedelta(days=1))
         self.axes.xaxis_date()
         self.axes.xaxis.set_major_formatter(DateFormatter('%H'))
         self.axes.xaxis.set_tick_params(labelrotation=90)
         self.axes.yaxis.set_major_formatter(ticker.StrMethodFormatter('{x:.0f}'))
+        if _min[1] // 10 <= 0:
+            self.axes.axhline(0, color='blue', linewidth=1.5)
 
     def has_valid_data(self):
         return self.data.is_valid()
@@ -117,8 +120,10 @@ class DailyTemperatureGraph(DataGraph):
 
 class ProgressBar(Graph):
     BACKGROUND = cm.get_cmap(name='Greys')(0.3)
+    DEFAULT_COLORMAP = 'BuGn'
+    _CACHE = {}
 
-    def __init__(self, progress: int, size: tuple, do_show_border=False, colormap_name='BuGn', color_name=None):
+    def __init__(self, progress: int, size: tuple, do_show_border=False, colormap_name=DEFAULT_COLORMAP, color_name=None):
         Graph.__init__(self, size)
         self.progress = progress
         self.show_border = do_show_border
@@ -140,6 +145,19 @@ class ProgressBar(Graph):
         if not self.show_border:
             self.axes.set_axis_off()
 
+    @staticmethod
+    def cached_svg(progress: int, size: tuple, do_show_border=False, colormap_name=DEFAULT_COLORMAP, color_name=None):
+        _hash = f"{progress}-{size}-{do_show_border}-{colormap_name}-{color_name}"
+        if _hash not in ProgressBar._CACHE:
+            ProgressBar._CACHE[_hash] = ProgressBar(
+                progress=progress,
+                size=size,
+                do_show_border=do_show_border,
+                colormap_name=colormap_name,
+                color_name=color_name
+            ).plot_to_svg()
+        return ProgressBar._CACHE[_hash]
+
 
 class BaseCesspitGraph(DataGraph):
     LABEL_FILL_PERC = f'Wypełnienie [%]'
@@ -157,6 +175,9 @@ class BaseCesspitGraph(DataGraph):
         self.estimated_avg_hourly_gain_perc = 0.1
         self.estimated_max_daily_gain_perc = 10.0
         self.estimated_avg_daily_gain_perc = 5.0
+
+    def prepare_plot(self):
+        raise NotImplementedError()
 
     @staticmethod
     def smart_fill_range(fill_perc_continuous: list) -> tuple:
@@ -501,13 +522,13 @@ class PredictionCesspitGraph(BaseCesspitGraph):
 
 if __name__ == '__main__':
     data_source = analysis_data_source()
-    # svg = DailyTemperatureGraph(data_source=analysis_data_source(), sensor_loc='External', title='Temperatura zewnętrzna').plot_to_svg()
+    svg = DailyTemperatureGraph(data_source=analysis_data_source(), sensor_loc='External', title='Temperatura zewnętrzna', style=TemperatureGraphRESTInterface.STYLE_FILLBETWEEN).plot_to_svg()
     # svg = ProgressBar(progress=20).plot_to_svg()
     # svg = Last24hCesspitGraph(data_source=data_source, tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
     # svg = DailyCesspitGraph(data_source=data_source, the_date=datetime.now(), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
     # svg = DailyCesspitGraph(data_source=data_source, the_date=datetime(2023, 10, 21), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
     # svg = DailyCesspitGraph(data_source=data_source, the_date=datetime(2023, 10, 27), tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
     # svg = PerDayCesspitGraph(data_source=data_source, the_date=datetime(2023, 11, 3), days_in_the_past=28, tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
-    svg = PredictionCesspitGraph(data_source=data_source, tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
+    # svg = PredictionCesspitGraph(data_source=data_source, tank_full_mm=500, tank_empty_mm=1952).plot_to_svg()
 
     print(svg)

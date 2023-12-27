@@ -177,13 +177,13 @@ class InfoApp(Flask):
     def horizontal_progress_bar(self):
         progress_info = ProgressBarRESTInterface(_flask_args=frequest.args)
         return Response(
-            a_graph.ProgressBar(
+            a_graph.ProgressBar.cached_svg(
                 progress=progress_info.progress,
                 size=progress_info.size,
                 do_show_border=progress_info.do_show_border,
                 color_name=progress_info.color,
                 colormap_name=progress_info.colormap
-            ).plot_to_svg(),
+            ),
             mimetype='image/svg+xml')
 
     def graph_cesspit_last24h(self):
@@ -191,6 +191,44 @@ class InfoApp(Flask):
 
         return Response(
             a_graph.Last24hCesspitGraph(
+                data_source=self.data_source,
+                tank_full_mm=cesspit_config.full_level_mm if cesspit_config.has_succeeded() else None,
+                tank_empty_mm=cesspit_config.empty_level_mm if cesspit_config.has_succeeded() else None
+            ).plot_to_svg(),
+            mimetype='image/svg+xml')
+
+    def graph_cesspit_single_day(self):
+        cesspit_history_params = CesspitHistoryRESTInterface(_flask_args=frequest.args)
+        cesspit_config = self.remote_cesspit_config.current_value()
+
+        return Response(
+            a_graph.DailyCesspitGraph(
+                data_source=self.data_source,
+                the_date=cesspit_history_params.the_date,
+                tank_full_mm=cesspit_config.full_level_mm if cesspit_config.has_succeeded() else None,
+                tank_empty_mm=cesspit_config.empty_level_mm if cesspit_config.has_succeeded() else None
+            ).plot_to_svg(),
+            mimetype='image/svg+xml')
+
+    def graph_cesspit_per_day(self):
+        cesspit_history_params = CesspitHistoryRESTInterface(_flask_args=frequest.args)
+        cesspit_config = self.remote_cesspit_config.current_value()
+
+        return Response(
+            a_graph.PerDayCesspitGraph(
+                data_source=self.data_source,
+                the_date=cesspit_history_params.the_date,
+                days_in_the_past=cesspit_history_params.days_in_past,
+                tank_full_mm=cesspit_config.full_level_mm if cesspit_config.has_succeeded() else None,
+                tank_empty_mm=cesspit_config.empty_level_mm if cesspit_config.has_succeeded() else None
+            ).plot_to_svg(),
+            mimetype='image/svg+xml')
+
+    def graph_cesspit_prediction(self):
+        cesspit_config = self.remote_cesspit_config.current_value()
+
+        return Response(
+            a_graph.PredictionCesspitGraph(
                 data_source=self.data_source,
                 tank_full_mm=cesspit_config.full_level_mm if cesspit_config.has_succeeded() else None,
                 tank_empty_mm=cesspit_config.empty_level_mm if cesspit_config.has_succeeded() else None
@@ -288,6 +326,21 @@ def graph_progress():
 @app.route('/graph/cesspit/24h')
 def graph_cesspit_last24h():
     return app.graph_cesspit_last24h()
+
+
+@app.route('/graph/cesspit/daily')
+def graph_cesspit_single_day():
+    return app.graph_cesspit_single_day()
+
+
+@app.route('/graph/cesspit/perday')
+def graph_cesspit_per_day():
+    return app.graph_cesspit_per_day()
+
+
+@app.route('/graph/cesspit/prediction')
+def graph_cesspit_prediction():
+    return app.graph_cesspit_prediction()
 
 
 @app.route('/current/wind')

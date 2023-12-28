@@ -822,7 +822,7 @@ class CesspitPrediction(CesspitHistory):
         _period = CesspitPrediction._period_ranges(tm)[0].hour
         if self._is_workday(tm):
             return self._get_workday_prediction(_period)
-        if self._is_festivity(tm):
+        if self._is_festivity(tm) or self._is_sunday(tm):
             return self._get_festivity_prediction(_period)
         return self._get_saturday_prediction(_period)
 
@@ -1006,7 +1006,7 @@ def analysis_data_source(credentials_file: str = None, config_file: str = None) 
 if __name__ == "__main__":
     db = analysis_data_source()
 
-    p = db.cesspit_prediction(tank_full_mm=500, tank_empty_mm=1952, the_date=datetime.now() - timedelta(days=3))
+    p = db.cesspit_prediction(tank_full_mm=500, tank_empty_mm=1952)
     print('WORKDAY')
     for period_start in CesspitPrediction.PERIOD_START_HOURS:
         print(f"{period_start:02d}: {p._get_workday_prediction(period_start)}")
@@ -1016,6 +1016,5 @@ if __name__ == "__main__":
     print('FESTIVITY')
     for period_start in CesspitPrediction.PERIOD_START_HOURS:
         print(f"{period_start:02d}: {p._get_festivity_prediction(period_start)}")
-    print(p.get_predicted_deltas())
-    print(p.get_predicted_levels())
-    print(p.get_predicted_timeline())
+    print(p.get_predicted_fill_perc())
+    print(p.get_predicted_date())

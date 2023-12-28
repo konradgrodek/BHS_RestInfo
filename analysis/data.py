@@ -78,8 +78,11 @@ class AnalysisDataSource:
             tank_empty_mm=tank_empty_mm
         )
 
-    def cesspit_prediction(self, tank_full_mm: int, tank_empty_mm: int, prediction_on_days: int = 8*7,
-                           the_date: datetime = datetime.now(), starting_level: int = -1):
+    def cesspit_prediction(self, tank_full_mm: int, tank_empty_mm: int, prediction_on_days: int = 8*7, starting_level: int = -1):
+        # note: this must become a method's parameter
+        # if one day the prediction at given point in the past will be needed
+        the_date = datetime.now()
+
         past_records = self.persistence.cesspit_observations_during_hours_in_past(
             the_date,
             hours_count=prediction_on_days * 24
@@ -88,6 +91,7 @@ class AnalysisDataSource:
             starting_level = past_records[-1].level
 
         if self._cached_cesspit_prediction and self._cached_cesspit_prediction.as_of_date == past_records[-1].timestamp:
+            # NOTE: this cache shall be rewritten if the_date will be ever used (to provide historical predictions)
             return self._cached_cesspit_prediction
 
         self._cached_cesspit_prediction = CesspitPrediction(

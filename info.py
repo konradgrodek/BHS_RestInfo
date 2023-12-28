@@ -235,6 +235,18 @@ class InfoApp(Flask):
             ).plot_to_svg(),
             mimetype='image/svg+xml')
 
+    def cesspit_prediction(self):
+        cesspit_config = self.remote_cesspit_config.current_value()
+        _prediction = self.data_source.cesspit_prediction(
+            tank_full_mm=cesspit_config.full_level_mm if cesspit_config.has_succeeded() else None,
+            tank_empty_mm=cesspit_config.empty_level_mm if cesspit_config.has_succeeded() else None
+        )
+        return bean_jsonified(
+            CesspitPredictionJson(
+                predicted_date=_prediction.get_predicted_date(),
+                as_of_date=_prediction.as_of_date
+            )
+        )
 
 # logging config
 if sys.gettrace() is None:
@@ -361,6 +373,11 @@ def statistics_temperature():
 @app.route('/current/water-tank')
 def current_water_tank():
     return app.current_water_tank()
+
+
+@app.route('/current/cesspit-prediction')
+def current_cesspit_prediction():
+    return app.cesspit_prediction()
 
 
 if __name__ == '__main__':

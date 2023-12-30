@@ -120,7 +120,10 @@ class AnalysisDataSource:
         return self._last_removal_date(the_date=past_records[0].timestamp)
 
     def cesspit_increase_since_last_removal_date(self, tank_full_mm: int, tank_empty_mm: int,
-                                                 the_date: datetime = datetime.now()):
+                                                 the_date: datetime = None):
+        if the_date is None:
+            the_date = datetime.now()
+
         _records = self.persistence.cesspit_observations(self._last_removal_date(the_date), the_date)
 
         return CesspitHistory(

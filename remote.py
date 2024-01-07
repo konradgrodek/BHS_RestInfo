@@ -41,7 +41,7 @@ class RemoteConnection:
                                   f'Details: {str(e)}')
 
         except requests.exceptions.RequestException as e:
-            error = ErrorJsonBean(f'Host {self.endpoint} is not responding correctly. '
+            error = ErrorJsonBean(f'Host @ {self.endpoint} is not responding correctly. '
                                   f'Details: {str(type(e))}: {str(e)}')
 
         return error, response

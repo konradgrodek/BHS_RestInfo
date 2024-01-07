@@ -1,5 +1,6 @@
 from configparser import ConfigParser, ExtendedInterpolation
 import sys
+import re
 
 
 class Configuration(ConfigParser):
@@ -21,6 +22,8 @@ class Configuration(ConfigParser):
     SECTION_WIND = 'WIND'
     SECTION_RAIN_GAUGE = 'RAIN-GAUGE'
     SECTION_WATER_TANK = 'WATER-TANK'
+    SECTION_SYS_STATUS = 'SYSTEM-STATUS'
+    SECTION_INTERNET = 'INTERNET'
 
     PARAM_DB = 'db'
     PARAM_USER = 'user'
@@ -34,6 +37,7 @@ class Configuration(ConfigParser):
     PARAM_SOLAR_PLANT_NOMINAL_POWER = 'max-nominal-power'
     PARAM_RAINGAUGE_MMPERHOUR = 'mm-per-hour'
     PARAM_CONFIG = 'config'
+    PARAM_POLLING_PERIOD = 'polling-period-s'
 
     def __init__(self):
         ConfigParser.__init__(self, interpolation=ExtendedInterpolation())
@@ -113,3 +117,21 @@ class Configuration(ConfigParser):
 
     def get_water_tank_host(self) -> str:
         return self.get(section=self.SECTION_WATER_TANK, option=self.PARAM_HOST)
+
+    def get_speedtest_host(self) -> str:
+        return self.get(section=self.SECTION_INTERNET, option=self.PARAM_HOST)
+
+    def get_system_status_polling_period(self) -> int:
+        return self.getint(section=self.SECTION_SYS_STATUS, option=self.PARAM_POLLING_PERIOD)
+
+    def get_system_services(self) -> list:
+        services = list()
+        for _option in self.options(self.SECTION_SYS_STATUS):
+            if re.fullmatch(r"service\.\d+", _option):
+                _endpoint = self.get(section=self.SECTION_SYS_STATUS, option=_option)
+                _name = self.get(section=self.SECTION_SYS_STATUS, option=_option+".name")
+                services.append((_endpoint, _name if _name else _option))
+
+        return services
+
+# EOF

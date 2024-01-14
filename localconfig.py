@@ -38,6 +38,8 @@ class Configuration(ConfigParser):
     PARAM_RAINGAUGE_MMPERHOUR = 'mm-per-hour'
     PARAM_CONFIG = 'config'
     PARAM_POLLING_PERIOD = 'polling-period-s'
+    PARAM_POLLING_PERIOD_OK = 'polling-period-ok-s'
+    PARAM_POLLING_PERIOD_KO = 'polling-period-ko-s'
 
     def __init__(self):
         ConfigParser.__init__(self, interpolation=ExtendedInterpolation())
@@ -121,8 +123,11 @@ class Configuration(ConfigParser):
     def get_speedtest_host(self) -> str:
         return self.get(section=self.SECTION_INTERNET, option=self.PARAM_HOST)
 
-    def get_system_status_polling_period(self) -> int:
-        return self.getint(section=self.SECTION_SYS_STATUS, option=self.PARAM_POLLING_PERIOD)
+    def get_system_status_polling_period_ok(self) -> int:
+        return self.getint(section=self.SECTION_SYS_STATUS, option=self.PARAM_POLLING_PERIOD_OK)
+
+    def get_system_status_polling_period_ko(self) -> int:
+        return self.getint(section=self.SECTION_SYS_STATUS, option=self.PARAM_POLLING_PERIOD_KO)
 
     def get_system_services(self) -> list:
         services = list()

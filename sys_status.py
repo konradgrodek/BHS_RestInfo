@@ -11,7 +11,8 @@ class SystemStatusThread(Thread):
 
     def __init__(self, config: Configuration):
         Thread.__init__(self, name="system-status-query-thread")
-        self.polling_period_s = config.get_system_status_polling_period()
+        self.polling_period_s_ok = config.get_system_status_polling_period_ok()
+        self.polling_period_s_ko = config.get_system_status_polling_period_ko()
         self.db_user = config.get_db_user()
         self.db_password = config.get_db_password()
         self.db_host = config.get_db_host()
@@ -31,7 +32,11 @@ class SystemStatusThread(Thread):
                 service_statuses=self._service_statuses(),
                 timestamp=datetime.now()
             )
-            ExitEvent().wait(timeout=self.polling_period_s)
+            ExitEvent().wait(
+                timeout=self.polling_period_s_ok
+                if self._the_reading.internet_connection_status.alive and self._the_reading.database_status.is_available
+                else self.polling_period_s_ko
+            )
 
     def reading(self) -> AbstractJsonBean:
         if self._the_reading is None:

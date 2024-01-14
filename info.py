@@ -2,12 +2,15 @@ from flask import Flask, Response
 from flask import request as frequest
 from logging.config import dictConfig
 import sys
+import signal
 
 from localconfig import Configuration
 import remote
+import sys_status
 import analysis.data as a_data
 import analysis.graph as a_graph
 from core.sbean import *
+from core.util import ExitEvent
 
 
 class InfoApp(Flask):
@@ -43,6 +46,9 @@ class InfoApp(Flask):
             endpoint=self.info_config.get_rain_gauge_host(),
             mm_per_impulse=self.info_config.get_rain_gauge_mm_per_impulse())
         self.remote_water_tank = remote.SimplyReroute(self.info_config.get_water_tank_host())
+        self.system_status_thread = sys_status.SystemStatusThread(self.info_config)
+        self.system_status_thread.start()
+        signal.signal(getattr(signal, 'SIGTERM'), self._stop_system_status_thread)
 
     def current_temperature(self):
         return self.remote_temperature.current_temperature()
@@ -248,6 +254,14 @@ class InfoApp(Flask):
             )
         )
 
+    def _stop_system_status_thread(self):
+        ExitEvent().set()
+        self.system_status_thread.join()
+
+    def system_status(self):
+        return bean_jsonified(self.system_status_thread.reading())
+
+
 # logging config
 if sys.gettrace() is None:
     dictConfig({
@@ -378,6 +392,11 @@ def current_water_tank():
 @app.route('/current/cesspit-prediction')
 def current_cesspit_prediction():
     return app.cesspit_prediction()
+
+
+@app.route('/system-status')
+def system_status():
+    return app.system_status()
 
 
 if __name__ == '__main__':

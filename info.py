@@ -35,6 +35,7 @@ class InfoApp(Flask):
                                              warning_level=self.info_config.get_cesspit_warning_level(),
                                              critical_level=self.info_config.get_cesspit_critical_level())
         self.remote_cesspit_config = remote.CesspitConfig(self.info_config.get_cesspit_config_host())
+        self.remote_cesspit_log = remote.SimplyReroute(self.info_config.get_cesspit_log_host())
         self.remote_daylight = remote.Daylight(self.info_config.get_daylight_host())
         self.remote_rain = remote.Rain()
         self.remote_soil_moisture = remote.SoilMoisture(self.info_config.get_soil_moisture_host())
@@ -254,6 +255,9 @@ class InfoApp(Flask):
             )
         )
 
+    def cesspit_log(self):
+        return self.remote_cesspit_log.reroute()
+
     def _stop_system_status_thread(self):
         ExitEvent().set()
         self.system_status_thread.join()
@@ -392,6 +396,11 @@ def current_water_tank():
 @app.route('/current/cesspit-prediction')
 def current_cesspit_prediction():
     return app.cesspit_prediction()
+
+
+@app.route('/current/cesspit-log')
+def current_cesspit_log():
+    return app.cesspit_log()
 
 
 @app.route('/system-status')

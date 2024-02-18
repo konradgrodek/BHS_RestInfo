@@ -1,7 +1,7 @@
 from core.bean import *
 from threading import Thread
 from datetime import datetime
-from core.util import ExitEvent
+from core.util import ExitEvent, HostInfoThread, PingIt
 from localconfig import Configuration
 from remote import RemoteConnection
 import mariadb
@@ -23,6 +23,12 @@ class SystemStatusThread(Thread):
             (RemoteConnection(_endpoint + r"/hc"), _name)
             for _endpoint, _name in config.get_system_services()
         ]
+        self._host_tests = [
+            (RemoteConnection(_endpoint + r"/hs"), _name)
+            for _endpoint, _name in config.get_remote_hosts()
+        ]
+        self._local_host_info = HostInfoThread(config.get_host_status_polling_period())
+        self._local_host_info.start()
 
     def run(self) -> None:
         while not ExitEvent().is_set():
@@ -30,6 +36,7 @@ class SystemStatusThread(Thread):
                 database_status=self._database_status(),
                 speedtest_result=self._internet_status(),
                 service_statuses=self._service_statuses(),
+                host_statuses=self._hosts_statuses(),
                 timestamp=datetime.now()
             )
             ExitEvent().wait(
@@ -37,6 +44,7 @@ class SystemStatusThread(Thread):
                 if self._the_reading.internet_connection_status.alive and self._the_reading.database_status.is_available
                 else self.polling_period_s_ko
             )
+        self._local_host_info.join()
 
     def reading(self) -> AbstractJsonBean:
         if self._the_reading is None:
@@ -135,6 +143,28 @@ class SystemStatusThread(Thread):
             else:
                 _statuses.append(json_to_bean(_response.json()))
 
+        return _statuses
+
+    def _hosts_statuses(self) -> list:
+        _statuses = list()
+        _tm = datetime.now()
+        for _remote_service, _name in self._host_tests:
+            _error, _response = _remote_service.make_request()
+
+            if _error:
+                _statuses.append(
+                    HostStateJson(
+                        up=PingIt(_remote_service.host, ping_timeout_ms=1000).ping().alive(),
+                        host_name=_name,
+                        timestamp=_tm
+                    )
+                )
+            else:
+                _status = json_to_bean(_response.json())
+                if _status.up is None:
+                    _status.up = True
+                _statuses.append(_status)
+        _statuses.append(self._local_host_info.host_status)
         return _statuses
 
 

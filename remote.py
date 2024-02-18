@@ -14,7 +14,12 @@ class RemoteConnection:
     def __init__(self, endpoint: str):
         self.endpoint = endpoint
         if not self.endpoint.startswith('http://'):
-             self.endpoint = 'http://' + endpoint
+            self.endpoint = 'http://' + endpoint
+        self.host = endpoint
+        if ':' in self.host:
+            self.host = self.host[:self.host.index(':')]
+        elif '/' in self.host:
+            self.host = self.host[:self.host.index('/')]
 
     def make_request(self) -> tuple:
         response = None

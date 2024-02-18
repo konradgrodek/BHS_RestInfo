@@ -23,6 +23,7 @@ class Configuration(ConfigParser):
     SECTION_RAIN_GAUGE = 'RAIN-GAUGE'
     SECTION_WATER_TANK = 'WATER-TANK'
     SECTION_SYS_STATUS = 'SYSTEM-STATUS'
+    SECTION_HOST_STATUS = 'HOST-STATUS'
     SECTION_INTERNET = 'INTERNET'
 
     PARAM_DB = 'db'
@@ -37,6 +38,7 @@ class Configuration(ConfigParser):
     PARAM_SOLAR_PLANT_NOMINAL_POWER = 'max-nominal-power'
     PARAM_RAINGAUGE_MMPERHOUR = 'mm-per-hour'
     PARAM_CONFIG = 'config'
+    PARAM_LOG = 'log'
     PARAM_POLLING_PERIOD = 'polling-period-s'
     PARAM_POLLING_PERIOD_OK = 'polling-period-ok-s'
     PARAM_POLLING_PERIOD_KO = 'polling-period-ko-s'
@@ -86,6 +88,10 @@ class Configuration(ConfigParser):
     def get_cesspit_config_host(self) -> str:
         return self.get(section=self.SECTION_CESSPIT, option=self.PARAM_HOST) + \
                self.get(section=self.SECTION_CESSPIT, option=self.PARAM_CONFIG)
+
+    def get_cesspit_log_host(self) -> str:
+        return self.get(section=self.SECTION_CESSPIT, option=self.PARAM_HOST) + \
+               self.get(section=self.SECTION_CESSPIT, option=self.PARAM_LOG)
 
     def get_cesspit_warning_level(self) -> float:
         return self.getfloat(section=self.SECTION_CESSPIT, option=self.PARAM_WARNING_LEVEL)
@@ -138,5 +144,20 @@ class Configuration(ConfigParser):
                 services.append((_endpoint, _name if _name else _option))
 
         return services
+
+    def get_remote_hosts(self) -> list:
+        hosts = list()
+
+        for _option in self.options(self.SECTION_SYS_STATUS):
+            if re.fullmatch(r"host\.\d+", _option):
+                _endpoint = self.get(section=self.SECTION_SYS_STATUS, option=_option)
+                _name = self.get(section=self.SECTION_SYS_STATUS, option=_option + ".name")
+                hosts.append((_endpoint, _name if _name else _option))
+
+        return hosts
+
+    def get_host_status_polling_period(self) -> int:
+        return self.getint(section=self.SECTION_HOST_STATUS, option=self.PARAM_POLLING_PERIOD, fallback=60)
+
 
 # EOF
